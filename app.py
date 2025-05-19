@@ -7,12 +7,20 @@ from features import add_features
 
 st.set_page_config(page_title="Crypto AI Trading", layout="wide")
 st.title("🚀 Crypto AI Trading Strategy")
-st.markdown("Predicting Bitcoin (BTC-USD) Next Day Movement with Machine Learning")
+st.markdown("Predicting Cryptocurrency Next-Day Movement with Machine Learning")
 
-@st.cache_data(ttl=3600)
-def fetch_data():
-    df = yf.download('BTC-USD', start='2023-01-01')
-    return df
+CRYPTO_OPTIONS = {
+    "Bitcoin (BTC-USD)": "BTC-USD",
+    "Ethereum (ETH-USD)": "ETH-USD",
+    "Cardano (ADA-USD)": "ADA-USD"
+}
+
+selected_crypto = st.selectbox("Select Cryptocurrency", list(CRYPTO_OPTIONS.keys()))
+ticker = CRYPTO_OPTIONS[selected_crypto]
+
+@st.cache_data(ttl=60)
+def fetch_data(symbol):
+    return yf.download(symbol, period="3mo", interval="1d")
 
 def load_model():
     return joblib.load("crypto_model.pkl")
@@ -37,22 +45,22 @@ def backtest_model(model, data_feat):
     accuracy = data_feat['Correct'].mean()
     return data_feat, accuracy
 
-if st.button("Run Prediction"):
-    with st.spinner("Fetching data and predicting..."):
-        df = fetch_data()
+if st.button("🔮 Predict Next Movement"):
+    with st.spinner(f"Fetching latest {selected_crypto} data and predicting..."):
+        df = fetch_data(ticker)
         if df.empty:
-            st.error("❌ Failed to load BTC data.")
+            st.error("❌ Failed to load crypto data.")
         else:
             model = load_model()
             prediction, probabilities, df_feat = predict_next_day_movement(model, df)
 
             close_price = float(df['Close'].iloc[-1])
-            st.markdown(f"### Latest BTC Close Price: ${close_price:,.2f}")
+            st.markdown(f"### Latest {selected_crypto} Close: ${close_price:,.2f}")
 
             if prediction == 1:
-                st.success("📈 Prediction for tomorrow: **UP**")
+                st.success("📈 Prediction: **UP**")
             else:
-                st.error("📉 Prediction for tomorrow: **DOWN**")
+                st.error("📉 Prediction: **DOWN**")
 
             st.markdown(f"""
             **Confidence**  
@@ -60,18 +68,18 @@ if st.button("Run Prediction"):
             - Down = {probabilities[0]*100:.2f}%
             """)
 
-            st.subheader("📊 Close Price History")
+            st.subheader("📊 Price History")
             st.line_chart(df['Close'])
 
-            st.subheader("📉 Backtest Model Accuracy")
+            st.subheader("📉 Backtest Accuracy")
             backtested_df, acc = backtest_model(model, df_feat.copy())
-            st.write(f"Historical Accuracy: **{acc*100:.2f}%**")
+            st.write(f"Accuracy: **{acc*100:.2f}%**")
 
-            st.subheader("📈 Predictions vs Actual Movements")
+            st.subheader("🆚 Predictions vs Actual")
             plot_df = backtested_df[-50:].copy()
             plot_df['Actual'] = plot_df['Target'].map({1: 'Up', 0: 'Down'})
             plot_df['Predicted'] = plot_df['Predicted'].map({1: 'Up', 0: 'Down'})
-            st.dataframe(plot_df[['Close', 'Actual', 'Predicted']].style.highlight_between(axis=1, color='lightgreen'))
+            st.dataframe(plot_df[['Close', 'Actual', 'Predicted']])
 
             st.subheader("📉 Technical Indicators")
             fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
@@ -79,12 +87,12 @@ if st.button("Run Prediction"):
             ax[0].plot(df_feat['SMA_20'], label='SMA 20')
             ax[0].plot(df_feat['SMA_50'], label='SMA 50')
             ax[0].legend()
-            ax[0].set_title('BTC Price and SMAs')
+            ax[0].set_title(f'{selected_crypto} Price and SMAs')
             ax[1].plot(df_feat['MACD'], label='MACD')
-            ax[1].plot(df_feat['MACD_Signal'], label='Signal Line')
-            ax[1].bar(df_feat.index, df_feat['MACD_Hist'], label='Histogram')
+            ax[1].plot(df_feat['MACD_Signal'], label='Signal')
+            ax[1].bar(df_feat.index, df_feat['MACD_Hist'], label='Hist')
             ax[1].legend()
             ax[1].set_title('MACD Indicators')
             st.pyplot(fig)
 else:
-    st.info("Click the button above to predict tomorrow's BTC movement.")
+    st.info("Click the button above to predict the selected crypto's next movement.")
