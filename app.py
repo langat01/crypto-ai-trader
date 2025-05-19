@@ -7,9 +7,7 @@ from features import add_features
 
 st.set_page_config(page_title="Crypto AI Trading", layout="wide")
 st.title("🚀 Crypto AI Trading Strategy")
-st.markdown("""
-Predicting Bitcoin (BTC-USD) Next Day Movement with Machine Learning
-""")
+st.markdown("Predicting Bitcoin (BTC-USD) Next Day Movement with Machine Learning")
 
 @st.cache_data(ttl=3600)
 def fetch_data():
@@ -52,12 +50,12 @@ if st.button("Run Prediction"):
             st.markdown(f"### Latest BTC Close Price: ${close_price:,.2f}")
 
             if prediction == 1:
-                st.success("📈 Prediction for tomorrow: *UP*")
+                st.success("📈 Prediction for tomorrow: **UP**")
             else:
-                st.error("📉 Prediction for tomorrow: *DOWN*")
+                st.error("📉 Prediction for tomorrow: **DOWN**")
 
             st.markdown(f"""
-            *Confidence*  
+            **Confidence**  
             - Up = {probabilities[1]*100:.2f}%  
             - Down = {probabilities[0]*100:.2f}%
             """)
@@ -65,19 +63,16 @@ if st.button("Run Prediction"):
             st.subheader("📊 Close Price History")
             st.line_chart(df['Close'])
 
-            # --- Backtest ---
             st.subheader("📉 Backtest Model Accuracy")
             backtested_df, acc = backtest_model(model, df_feat.copy())
-            st.write(f"Historical Accuracy: *{acc*100:.2f}%*")
+            st.write(f"Historical Accuracy: **{acc*100:.2f}%**")
 
-            # --- Chart of Predictions vs Actual ---
             st.subheader("📈 Predictions vs Actual Movements")
             plot_df = backtested_df[-50:].copy()
             plot_df['Actual'] = plot_df['Target'].map({1: 'Up', 0: 'Down'})
             plot_df['Predicted'] = plot_df['Predicted'].map({1: 'Up', 0: 'Down'})
             st.dataframe(plot_df[['Close', 'Actual', 'Predicted']].style.highlight_between(axis=1, color='lightgreen'))
 
-            # --- Plot indicators ---
             st.subheader("📉 Technical Indicators")
             fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
             ax[0].plot(df_feat['Close'], label='Close Price')
