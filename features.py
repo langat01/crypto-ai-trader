@@ -2,8 +2,8 @@ import pandas as pd
 
 def compute_rsi(data, window=14):
     delta = data['Close'].diff()
-    gain = delta.clip(lower=0).rolling(window=window).mean()
-    loss = (-delta.clip(upper=0)).rolling(window=window).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
@@ -29,19 +29,9 @@ def add_features(data):
     data.dropna(inplace=True)
     return data
 
-def prepare_training_data(data):
-    # Prepare features and target for ML training
-    data_feat = add_features(data)
-    data_feat['Target'] = (data_feat['Close'].shift(-1) > data_feat['Close']).astype(int)
-    features = ['RSI', 'MACD', 'MACD_Signal', 'MACD_Hist', 'SMA_20', 'SMA_50', 'Momentum']
-    X = data_feat[features]
-    y = data_feat['Target']
-    return X, y
-
-# Optional: test features.py
-if __name__ == "__main__":
+# Optional: test features.py alone
+if _name_ == "_main_":
     import yfinance as yf
     df = yf.download('BTC-USD', start='2023-01-01', end='2025-05-18')
-    X, y = prepare_training_data(df)
-    print(X.tail())
-    print(y.tail())
+    df_feat = add_features(df)
+    print(df_feat.tail())
