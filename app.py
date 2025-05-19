@@ -1,13 +1,12 @@
 import streamlit as st
 import yfinance as yf
 import joblib
-from features import add_features, prepare_training_data
 import pandas as pd
-import matplotlib.pyplot as plt
+from features import add_features, prepare_training_data
+from sklearn.ensemble import RandomForestClassifier
 
 st.set_page_config(page_title="🚀 Crypto AI Trading", layout="wide")
 
-# Sidebar controls
 st.sidebar.header("Settings")
 crypto_symbol = st.sidebar.selectbox("Select Cryptocurrency", ['BTC-USD', 'ETH-USD', 'LTC-USD', 'DOGE-USD'])
 start_date = st.sidebar.date_input("Training Start Date", value=pd.to_datetime("2023-01-01"))
@@ -23,8 +22,8 @@ def fetch_data(symbol, start, end):
 def load_model(symbol):
     try:
         return joblib.load(f"models/{symbol}_model.pkl")
-    except:
-        st.warning("No existing model found for this coin. Please retrain.")
+    except FileNotFoundError:
+        st.warning("No existing model found. Please retrain.")
         return None
 
 if action == "Run Prediction":
@@ -35,7 +34,7 @@ if action == "Run Prediction":
         else:
             model = load_model(crypto_symbol)
             if model is None:
-                st.info("Please retrain the model first.")
+                st.info("Please retrain the model first using the sidebar option.")
             else:
                 data_feat = add_features(df)
                 latest = data_feat.iloc[[-1]]
@@ -44,23 +43,35 @@ if action == "Run Prediction":
                 pred = model.predict(X_latest)[0]
                 prob = model.predict_proba(X_latest)[0]
 
-                st.metric("Latest Close Price", f"${df['Close'].iloc[-1]:,.2f}")
-                st.metric("Prediction for Tomorrow", "UP" if pred == 1 else "DOWN")
-                st.write(f"Confidence - Up: {prob[1]*100:.2f}%, Down: {prob[0]*100:.2f}%")
+                col1, col2 = st.columns(2)
+                col1.metric("Latest Close Price", f"${df['Close'].iloc[-1]:,.2f}")
+                col2.metric("Prediction for Tomorrow", "UP" if pred == 1 else "DOWN")
 
-                st.subheader("Close Price History")
+                st.write(f"Confidence: Up = {prob[1]*100:.2f}%, Down = {prob[0]*100:.2f}%")
+
+                st.subheader("📈 Close Price History")
                 st.line_chart(df['Close'])
 
 elif action == "Retrain Model":
-    st.info("Training model with selected data range. This may take some time.")
+    st.info("Training model with selected data range. This might take a few moments.")
     df = fetch_data(crypto_symbol, start_date, end_date)
     if df.empty:
         st.error("❌ Failed to load data.")
     else:
         X, y = prepare_training_data(df)
-        from sklearn.ensemble import RandomForestClassifier
-        model = RandomForestClassifier(n_estimators=100, random_state=42)
-        model.fit(X, y)
-        joblib.dump(model, f"models/{crypto_symbol}_model.pkl")
-        st.success("✅ Model retrained and saved successfully!")
+        if len(X) == 0:
+            st.error("Not enough data after feature processing to train the model.")
+        else:
+            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            model.fit(X, y)
+            joblib.dump(model, f"models/{crypto_symbol}_model.pkl")
+            st.success("✅ Model retrained and saved successfully!")
 
+            # Show some training stats
+            st.write(f"Training samples: {len(y)}")
+            st.write(f"Up days: {sum(y)}, Down days: {len(y)-sum(y)}")
+
+            # Optional: Backtest accuracy on training data
+            preds = model.predict(X)
+            accuracy = (preds == y).mean()
+            st.write(f"Training accuracy: {accuracy*100:.2f}%")
