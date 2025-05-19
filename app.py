@@ -8,6 +8,8 @@ from model_utils import load_model
 from backtest import backtest
 from plot_utils import plot_price, plot_macd
 from features import add_features
+from email_utils import send_email_alert
+from sms_utils import send_sms_alert
 
 st.set_page_config(page_title="🚀 AI Crypto Trading", layout="wide")
 
@@ -40,7 +42,7 @@ def run_prediction():
     if df.empty:
         st.error("❌ Could not load data.")
         return
-    
+
     df_feat = add_features(df, scale=True, include_target=False)
     latest = df_feat.iloc[[-1]]
 
@@ -65,6 +67,52 @@ def run_prediction():
     st.dataframe(bt_df[['Close', 'Target', 'Predicted']].tail(20))
 
     explain_prediction(model, latest)
+
+    # --- Email Alert Section ---
+    st.subheader("📧 Email Prediction Alert")
+    with st.expander("Send email notification"):
+        to_email = st.text_input("Recipient Email Address")
+        from_email = st.text_input("Sender Gmail Address")
+        app_password = st.text_input("Gmail App Password", type="password")
+        if st.button("Send Email Alert"):
+            if to_email and from_email and app_password:
+                result = send_email_alert(
+                    "UP" if prediction == 1 else "DOWN",
+                    proba[prediction] * 100,
+                    to_email,
+                    from_email,
+                    app_password
+                )
+                if result is True:
+                    st.success("✅ Email sent successfully.")
+                else:
+                    st.error(result)
+            else:
+                st.warning("Please fill in all email fields.")
+
+    # --- SMS Alert Section ---
+    st.subheader("📱 SMS Prediction Alert")
+    with st.expander("Send SMS notification"):
+        to_number = st.text_input("Recipient Phone Number (e.g. +2547XXXXXXX)")
+        from_number = st.text_input("Twilio Phone Number")
+        twilio_sid = st.text_input("Twilio Account SID")
+        twilio_token = st.text_input("Twilio Auth Token", type="password")
+        if st.button("Send SMS Alert"):
+            if to_number and from_number and twilio_sid and twilio_token:
+                result = send_sms_alert(
+                    "UP" if prediction == 1 else "DOWN",
+                    proba[prediction] * 100,
+                    to_number,
+                    from_number,
+                    twilio_sid,
+                    twilio_token
+                )
+                if result is True:
+                    st.success("✅ SMS sent successfully.")
+                else:
+                    st.error(result)
+            else:
+                st.warning("Please fill in all SMS fields.")
 
 # Trigger prediction
 if run:
