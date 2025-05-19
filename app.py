@@ -7,27 +7,28 @@ from features import add_features
 
 st.set_page_config(page_title="Crypto AI Trading", layout="wide")
 st.title("🚀 Crypto AI Trading Strategy")
+
 st.markdown("""
-Predicting Next Day Movement with Machine Learning
+Predicting Cryptocurrency Movement with Machine Learning  
 """)
 
-# --- Available Coins and Model Mapping ---
-COINS = {
-    "Bitcoin (BTC)": ("BTC-USD", "btc_model.pkl"),
-    "Ethereum (ETH)": ("ETH-USD", "eth_model.pkl"),
-    "Cardano (ADA)": ("ADA-USD", "ada_model.pkl")
+# --- Select coin
+coin_mapping = {
+    "Bitcoin (BTC)": "BTC-USD",
+    "Ethereum (ETH)": "ETH-USD",
+    "Cardano (ADA)": "ADA-USD"
 }
+coin_name = st.selectbox("Select Cryptocurrency", list(coin_mapping.keys()))
+symbol = coin_mapping[coin_name]
 
-# --- Select Coin ---
-coin_name = st.selectbox("Choose a cryptocurrency:", list(COINS.keys()))
-ticker, model_path = COINS[coin_name]
+@st.cache_data(ttl=1800)
+def fetch_data(symbol):
+    df = yf.download(symbol, start='2023-01-01')
+    return df
 
-@st.cache_data(ttl=3600)
-def fetch_data(ticker):
-    return yf.download(ticker, start='2023-01-01')
-
-def load_model(path):
-    return joblib.load(path)
+def load_model(symbol):
+    # For now, assume 1 model for all coins
+    return joblib.load("crypto_model.pkl")
 
 def predict_next_day_movement(model, data):
     data_feat = add_features(data)
@@ -50,16 +51,16 @@ def backtest_model(model, data_feat):
     return data_feat, accuracy
 
 if st.button("Run Prediction"):
-    with st.spinner(f"Fetching data for {ticker} and predicting..."):
-        df = fetch_data(ticker)
+    with st.spinner(f"Fetching {coin_name} data and predicting..."):
+        df = fetch_data(symbol)
         if df.empty:
-            st.error(f"❌ Failed to load data for {ticker}.")
+            st.error("❌ Failed to load data.")
         else:
-            model = load_model(model_path)
+            model = load_model(symbol)
             prediction, probabilities, df_feat = predict_next_day_movement(model, df)
 
             close_price = float(df['Close'].iloc[-1])
-            st.markdown(f"### Latest {ticker} Close Price: ${close_price:,.2f}")
+            st.markdown(f"### Latest {coin_name} Close Price: ${close_price:,.2f}")
 
             if prediction == 1:
                 st.success("📈 Prediction for tomorrow: **UP**")
@@ -69,32 +70,32 @@ if st.button("Run Prediction"):
             st.markdown(f"""
             **Confidence**  
             - Up = {probabilities[1]*100:.2f}%  
-            - Down = {probabilities[0]*100:.2f}%
+            - Down = {probabilities[0]*100:.2f}%  
             """)
 
             st.subheader("📊 Close Price History")
             st.line_chart(df['Close'])
 
-            # --- Backtest ---
+            # Backtest
             st.subheader("📉 Backtest Model Accuracy")
             backtested_df, acc = backtest_model(model, df_feat.copy())
             st.write(f"Historical Accuracy: **{acc*100:.2f}%**")
 
-            # --- Chart of Predictions vs Actual ---
+            # Predictions vs Actual
             st.subheader("📈 Predictions vs Actual Movements")
             plot_df = backtested_df[-50:].copy()
             plot_df['Actual'] = plot_df['Target'].map({1: 'Up', 0: 'Down'})
             plot_df['Predicted'] = plot_df['Predicted'].map({1: 'Up', 0: 'Down'})
             st.dataframe(plot_df[['Close', 'Actual', 'Predicted']].style.highlight_between(axis=1, color='lightgreen'))
 
-            # --- Plot indicators ---
+            # Indicators
             st.subheader("📉 Technical Indicators")
             fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
             ax[0].plot(df_feat['Close'], label='Close Price')
             ax[0].plot(df_feat['SMA_20'], label='SMA 20')
             ax[0].plot(df_feat['SMA_50'], label='SMA 50')
             ax[0].legend()
-            ax[0].set_title(f'{ticker} Price and SMAs')
+            ax[0].set_title(f'{coin_name} Price and SMAs')
             ax[1].plot(df_feat['MACD'], label='MACD')
             ax[1].plot(df_feat['MACD_Signal'], label='Signal Line')
             ax[1].bar(df_feat.index, df_feat['MACD_Hist'], label='Histogram')
