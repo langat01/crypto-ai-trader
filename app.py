@@ -1,122 +1,95 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import shap
-import plotly.graph_objects as go
-
-from model_utils import load_model
-from backtest import backtest
-from plot_utils import plot_price, plot_macd
+import joblib
+import matplotlib.pyplot as plt
 from features import add_features
-from email_utils import send_email_alert
-from sms_utils import send_sms_alert
 
-st.set_page_config(page_title="🚀 AI Crypto Trading", layout="wide")
-
-st.title("📈 AI-Powered Crypto Trading Strategy")
-
-# --- Inputs ---
-st.sidebar.header("🔧 Settings")
-symbol = st.sidebar.text_input("Crypto Symbol", value="BTC-USD")
-model_name = st.sidebar.selectbox("Select Model", ["RandomForest", "XGBoost"])
-show_features = st.sidebar.checkbox("Show Technical Indicators")
-run = st.sidebar.button("Predict")
+st.set_page_config(page_title="Crypto AI Trading", layout="wide")
+st.title("🚀 Crypto AI Trading Strategy")
+st.markdown("""
+Predicting Bitcoin (BTC-USD) Next Day Movement with Machine Learning
+""")
 
 @st.cache_data(ttl=3600)
-def load_data(symbol):
-    return yf.download(symbol, start="2023-01-01")
+def fetch_data():
+    df = yf.download('BTC-USD', start='2023-01-01')
+    return df
 
-def explain_prediction(model, X_input):
-    st.subheader("📊 Model Explainability (SHAP)")
-    try:
-        explainer = shap.Explainer(model, X_input)
-        shap_values = explainer(X_input)
-        st.set_option('deprecation.showPyplotGlobalUse', False)
-        shap.plots.waterfall(shap_values[0], max_display=10, show=False)
-        st.pyplot(bbox_inches='tight')
-    except Exception as e:
-        st.warning(f"SHAP not supported for this model: {e}")
+def load_model():
+    return joblib.load("crypto_model.pkl")
 
-def run_prediction():
-    df = load_data(symbol)
-    if df.empty:
-        st.error("❌ Could not load data.")
-        return
+def predict_next_day_movement(model, data):
+    data_feat = add_features(data)
+    latest = data_feat.iloc[[-1]]
+    features = ['RSI', 'MACD', 'MACD_Signal', 'MACD_Hist', 'SMA_20', 'SMA_50', 'Momentum']
+    X_latest = latest[features]
+    pred = model.predict(X_latest)[0]
+    prob = model.predict_proba(X_latest)[0]
+    return pred, prob, data_feat
 
-    df_feat = add_features(df, scale=True, include_target=False)
-    latest = df_feat.iloc[[-1]]
+def backtest_model(model, data_feat):
+    data_feat['Target'] = (data_feat['Close'].shift(-1) > data_feat['Close']).astype(int)
+    features = ['RSI', 'MACD', 'MACD_Signal', 'MACD_Hist', 'SMA_20', 'SMA_50', 'Momentum']
+    X = data_feat[features]
+    y = data_feat['Target']
+    preds = model.predict(X)
+    data_feat['Predicted'] = preds
+    data_feat['Correct'] = (preds == y).astype(int)
+    accuracy = data_feat['Correct'].mean()
+    return data_feat, accuracy
 
-    model = load_model(model_name)
-    prediction = model.predict(latest)[0]
-    proba = model.predict_proba(latest)[0]
+if st.button("Run Prediction"):
+    with st.spinner("Fetching data and predicting..."):
+        df = fetch_data()
+        if df.empty:
+            st.error("❌ Failed to load BTC data.")
+        else:
+            model = load_model()
+            prediction, probabilities, df_feat = predict_next_day_movement(model, df)
 
-    st.metric("Latest Price", f"${df['Close'].iloc[-1]:,.2f}")
-    st.info(f"Prediction: {'📈 UP' if prediction == 1 else '📉 DOWN'}")
-    st.info(f"Confidence: Up = {proba[1]*100:.2f}%, Down = {proba[0]*100:.2f}%")
+            close_price = float(df['Close'].iloc[-1])
+            st.markdown(f"### Latest BTC Close Price: ${close_price:,.2f}")
 
-    if show_features:
-        st.subheader("🧮 Technical Indicators (Latest)")
-        st.dataframe(latest.T.rename(columns={latest.index[-1]: "Value"}))
-
-    st.plotly_chart(plot_price(df_feat), use_container_width=True)
-    st.plotly_chart(plot_macd(df_feat), use_container_width=True)
-
-    st.subheader("📉 Backtest Results")
-    bt_df, acc = backtest(model, df_feat)
-    st.success(f"Backtest Accuracy: {acc * 100:.2f}%")
-    st.dataframe(bt_df[['Close', 'Target', 'Predicted']].tail(20))
-
-    explain_prediction(model, latest)
-
-    # --- Email Alert Section ---
-    st.subheader("📧 Email Prediction Alert")
-    with st.expander("Send email notification"):
-        to_email = st.text_input("Recipient Email Address")
-        from_email = st.text_input("Sender Gmail Address")
-        app_password = st.text_input("Gmail App Password", type="password")
-        if st.button("Send Email Alert"):
-            if to_email and from_email and app_password:
-                result = send_email_alert(
-                    "UP" if prediction == 1 else "DOWN",
-                    proba[prediction] * 100,
-                    to_email,
-                    from_email,
-                    app_password
-                )
-                if result is True:
-                    st.success("✅ Email sent successfully.")
-                else:
-                    st.error(result)
+            if prediction == 1:
+                st.success("📈 Prediction for tomorrow: *UP*")
             else:
-                st.warning("Please fill in all email fields.")
+                st.error("📉 Prediction for tomorrow: *DOWN*")
 
-    # --- SMS Alert Section ---
-    st.subheader("📱 SMS Prediction Alert")
-    with st.expander("Send SMS notification"):
-        to_number = st.text_input("Recipient Phone Number (e.g. +2547XXXXXXX)")
-        from_number = st.text_input("Twilio Phone Number")
-        twilio_sid = st.text_input("Twilio Account SID")
-        twilio_token = st.text_input("Twilio Auth Token", type="password")
-        if st.button("Send SMS Alert"):
-            if to_number and from_number and twilio_sid and twilio_token:
-                result = send_sms_alert(
-                    "UP" if prediction == 1 else "DOWN",
-                    proba[prediction] * 100,
-                    to_number,
-                    from_number,
-                    twilio_sid,
-                    twilio_token
-                )
-                if result is True:
-                    st.success("✅ SMS sent successfully.")
-                else:
-                    st.error(result)
-            else:
-                st.warning("Please fill in all SMS fields.")
+            st.markdown(f"""
+            *Confidence*  
+            - Up = {probabilities[1]*100:.2f}%  
+            - Down = {probabilities[0]*100:.2f}%
+            """)
 
-# Trigger prediction
-if run:
-    with st.spinner("Running prediction..."):
-        run_prediction()
+            st.subheader("📊 Close Price History")
+            st.line_chart(df['Close'])
+
+            # --- Backtest ---
+            st.subheader("📉 Backtest Model Accuracy")
+            backtested_df, acc = backtest_model(model, df_feat.copy())
+            st.write(f"Historical Accuracy: *{acc*100:.2f}%*")
+
+            # --- Chart of Predictions vs Actual ---
+            st.subheader("📈 Predictions vs Actual Movements")
+            plot_df = backtested_df[-50:].copy()
+            plot_df['Actual'] = plot_df['Target'].map({1: 'Up', 0: 'Down'})
+            plot_df['Predicted'] = plot_df['Predicted'].map({1: 'Up', 0: 'Down'})
+            st.dataframe(plot_df[['Close', 'Actual', 'Predicted']].style.highlight_between(axis=1, color='lightgreen'))
+
+            # --- Plot indicators ---
+            st.subheader("📉 Technical Indicators")
+            fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+            ax[0].plot(df_feat['Close'], label='Close Price')
+            ax[0].plot(df_feat['SMA_20'], label='SMA 20')
+            ax[0].plot(df_feat['SMA_50'], label='SMA 50')
+            ax[0].legend()
+            ax[0].set_title('BTC Price and SMAs')
+            ax[1].plot(df_feat['MACD'], label='MACD')
+            ax[1].plot(df_feat['MACD_Signal'], label='Signal Line')
+            ax[1].bar(df_feat.index, df_feat['MACD_Hist'], label='Histogram')
+            ax[1].legend()
+            ax[1].set_title('MACD Indicators')
+            st.pyplot(fig)
 else:
-    st.info("Use the sidebar to select options and run a prediction.")
+    st.info("Click the button above to predict tomorrow's BTC movement.")
