@@ -7,23 +7,27 @@ from features import add_features
 
 st.set_page_config(page_title="Crypto AI Trading", layout="wide")
 st.title("🚀 Crypto AI Trading Strategy")
-st.markdown("Predicting Cryptocurrency Next-Day Movement with Machine Learning")
+st.markdown("""
+Predicting Next Day Movement with Machine Learning
+""")
 
-CRYPTO_OPTIONS = {
-    "Bitcoin (BTC-USD)": "BTC-USD",
-    "Ethereum (ETH-USD)": "ETH-USD",
-    "Cardano (ADA-USD)": "ADA-USD"
+# --- Available Coins and Model Mapping ---
+COINS = {
+    "Bitcoin (BTC)": ("BTC-USD", "btc_model.pkl"),
+    "Ethereum (ETH)": ("ETH-USD", "eth_model.pkl"),
+    "Cardano (ADA)": ("ADA-USD", "ada_model.pkl")
 }
 
-selected_crypto = st.selectbox("Select Cryptocurrency", list(CRYPTO_OPTIONS.keys()))
-ticker = CRYPTO_OPTIONS[selected_crypto]
+# --- Select Coin ---
+coin_name = st.selectbox("Choose a cryptocurrency:", list(COINS.keys()))
+ticker, model_path = COINS[coin_name]
 
-@st.cache_data(ttl=60)
-def fetch_data(symbol):
-    return yf.download(symbol, period="3mo", interval="1d")
+@st.cache_data(ttl=3600)
+def fetch_data(ticker):
+    return yf.download(ticker, start='2023-01-01')
 
-def load_model():
-    return joblib.load("crypto_model.pkl")
+def load_model(path):
+    return joblib.load(path)
 
 def predict_next_day_movement(model, data):
     data_feat = add_features(data)
@@ -45,22 +49,22 @@ def backtest_model(model, data_feat):
     accuracy = data_feat['Correct'].mean()
     return data_feat, accuracy
 
-if st.button("🔮 Predict Next Movement"):
-    with st.spinner(f"Fetching latest {selected_crypto} data and predicting..."):
+if st.button("Run Prediction"):
+    with st.spinner(f"Fetching data for {ticker} and predicting..."):
         df = fetch_data(ticker)
         if df.empty:
-            st.error("❌ Failed to load crypto data.")
+            st.error(f"❌ Failed to load data for {ticker}.")
         else:
-            model = load_model()
+            model = load_model(model_path)
             prediction, probabilities, df_feat = predict_next_day_movement(model, df)
 
             close_price = float(df['Close'].iloc[-1])
-            st.markdown(f"### Latest {selected_crypto} Close: ${close_price:,.2f}")
+            st.markdown(f"### Latest {ticker} Close Price: ${close_price:,.2f}")
 
             if prediction == 1:
-                st.success("📈 Prediction: **UP**")
+                st.success("📈 Prediction for tomorrow: **UP**")
             else:
-                st.error("📉 Prediction: **DOWN**")
+                st.error("📉 Prediction for tomorrow: **DOWN**")
 
             st.markdown(f"""
             **Confidence**  
@@ -68,31 +72,34 @@ if st.button("🔮 Predict Next Movement"):
             - Down = {probabilities[0]*100:.2f}%
             """)
 
-            st.subheader("📊 Price History")
+            st.subheader("📊 Close Price History")
             st.line_chart(df['Close'])
 
-            st.subheader("📉 Backtest Accuracy")
+            # --- Backtest ---
+            st.subheader("📉 Backtest Model Accuracy")
             backtested_df, acc = backtest_model(model, df_feat.copy())
-            st.write(f"Accuracy: **{acc*100:.2f}%**")
+            st.write(f"Historical Accuracy: **{acc*100:.2f}%**")
 
-            st.subheader("🆚 Predictions vs Actual")
+            # --- Chart of Predictions vs Actual ---
+            st.subheader("📈 Predictions vs Actual Movements")
             plot_df = backtested_df[-50:].copy()
             plot_df['Actual'] = plot_df['Target'].map({1: 'Up', 0: 'Down'})
             plot_df['Predicted'] = plot_df['Predicted'].map({1: 'Up', 0: 'Down'})
-            st.dataframe(plot_df[['Close', 'Actual', 'Predicted']])
+            st.dataframe(plot_df[['Close', 'Actual', 'Predicted']].style.highlight_between(axis=1, color='lightgreen'))
 
+            # --- Plot indicators ---
             st.subheader("📉 Technical Indicators")
             fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
             ax[0].plot(df_feat['Close'], label='Close Price')
             ax[0].plot(df_feat['SMA_20'], label='SMA 20')
             ax[0].plot(df_feat['SMA_50'], label='SMA 50')
             ax[0].legend()
-            ax[0].set_title(f'{selected_crypto} Price and SMAs')
+            ax[0].set_title(f'{ticker} Price and SMAs')
             ax[1].plot(df_feat['MACD'], label='MACD')
-            ax[1].plot(df_feat['MACD_Signal'], label='Signal')
-            ax[1].bar(df_feat.index, df_feat['MACD_Hist'], label='Hist')
+            ax[1].plot(df_feat['MACD_Signal'], label='Signal Line')
+            ax[1].bar(df_feat.index, df_feat['MACD_Hist'], label='Histogram')
             ax[1].legend()
             ax[1].set_title('MACD Indicators')
             st.pyplot(fig)
 else:
-    st.info("Click the button above to predict the selected crypto's next movement.")
+    st.info("Click the button above to predict tomorrow's movement.")
