@@ -18,9 +18,8 @@ def compute_rsi(data: pd.DataFrame, window: int = 14) -> pd.Series:
     avg_gain = gain.rolling(window=window, min_periods=1).mean()
     avg_loss = loss.rolling(window=window, min_periods=1).mean()
     
-    rs = avg_gain / avg_loss.replace(0, np.nan)  # Avoid division by zero
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
 
 def compute_macd(
     data: pd.DataFrame, 
@@ -37,8 +36,7 @@ def compute_macd(
     ema_long = data['Close'].ewm(span=span_long, adjust=False).mean()
     macd = ema_short - ema_long
     signal = macd.ewm(span=span_signal, adjust=False).mean()
-    histogram = macd - signal
-    return macd, signal, histogram
+    return macd, signal, macd - signal
 
 def add_features(
     data: pd.DataFrame,
@@ -48,11 +46,7 @@ def add_features(
     momentum_window: int = 5,
     volatility_window: int = 10
 ) -> pd.DataFrame:
-    """
-    Enhanced feature engineering with configurable parameters.
-    Returns DataFrame with technical indicators and cleaned data.
-    """
-    # Input validation
+    """Enhanced feature engineering with configurable parameters."""
     if not isinstance(data, pd.DataFrame):
         raise TypeError("Input must be a pandas DataFrame")
     if 'Close' not in data.columns:
@@ -62,8 +56,8 @@ def add_features(
     data['Close'] = pd.to_numeric(data['Close'], errors='coerce')
     data = data[data['Close'].notna()]
     
-    # Calculate all indicators
-    data['RSI'] = compute_rsi(data, window=rsi_window)
+    # Calculate indicators
+    data['RSI'] = compute_rsi(data, rsi_window)
     
     macd, signal, hist = compute_macd(
         data,
@@ -78,7 +72,7 @@ def add_features(
     for window in sma_windows:
         data[f'SMA_{window}'] = data['Close'].rolling(window=window).mean()
     
-    data['Momentum'] = data['Close'].pct_change(periods=momentum_window)
+    data['Momentum'] = data['Close'].pct_change(momentum_window)
     data['Volatility'] = data['Close'].pct_change().rolling(volatility_window).std()
     
     return data.dropna()
