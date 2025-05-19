@@ -18,6 +18,20 @@ def compute_macd(data, span_short=12, span_long=26, span_signal=9):
 
 def add_features(data):
     data = data.copy()
+
+    if not isinstance(data, pd.DataFrame):
+        raise TypeError("Input must be a pandas DataFrame")
+    if 'Close' not in data.columns:
+        raise ValueError("Input DataFrame must contain 'Close' column")
+
+    close_col = data['Close']
+    if isinstance(close_col, pd.DataFrame):
+        close_col = close_col.squeeze()
+
+    data['Close'] = pd.to_numeric(close_col, errors='coerce')
+    data = data[data['Close'].notna()]
+    data.dropna(inplace=True)
+
     data['RSI'] = compute_rsi(data)
     macd, signal, hist = compute_macd(data)
     data['MACD'] = macd
@@ -26,12 +40,6 @@ def add_features(data):
     data['SMA_20'] = data['Close'].rolling(window=20).mean()
     data['SMA_50'] = data['Close'].rolling(window=50).mean()
     data['Momentum'] = data['Close'] - data['Close'].shift(5)
+
     data.dropna(inplace=True)
     return data
-
-# Optional: test features.py alone
-if _name_ == "_main_":
-    import yfinance as yf
-    df = yf.download('BTC-USD', start='2023-01-01', end='2025-05-18')
-    df_feat = add_features(df)
-    print(df_feat.tail())
