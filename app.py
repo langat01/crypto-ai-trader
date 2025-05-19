@@ -1,106 +1,66 @@
 import streamlit as st
 import yfinance as yf
-import pandas as pd
 import joblib
+from features import add_features, prepare_training_data
+import pandas as pd
 import matplotlib.pyplot as plt
-from features import add_features
 
-st.set_page_config(page_title="Crypto AI Trading", layout="wide")
-st.title("🚀 Crypto AI Trading Strategy")
+st.set_page_config(page_title="🚀 Crypto AI Trading", layout="wide")
 
-st.markdown("""
-Predicting Cryptocurrency Movement with Machine Learning  
-""")
+# Sidebar controls
+st.sidebar.header("Settings")
+crypto_symbol = st.sidebar.selectbox("Select Cryptocurrency", ['BTC-USD', 'ETH-USD', 'LTC-USD', 'DOGE-USD'])
+start_date = st.sidebar.date_input("Training Start Date", value=pd.to_datetime("2023-01-01"))
+end_date = st.sidebar.date_input("Training End Date", value=pd.to_datetime("today"))
+action = st.sidebar.radio("Choose Action", ["Run Prediction", "Retrain Model"])
 
-# --- Select coin
-coin_mapping = {
-    "Bitcoin (BTC)": "BTC-USD",
-    "Ethereum (ETH)": "ETH-USD",
-    "Cardano (ADA)": "ADA-USD"
-}
-coin_name = st.selectbox("Select Cryptocurrency", list(coin_mapping.keys()))
-symbol = coin_mapping[coin_name]
+st.title(f"🚀 Crypto AI Trading Strategy: {crypto_symbol}")
 
-@st.cache_data(ttl=1800)
-def fetch_data(symbol):
-    df = yf.download(symbol, start='2023-01-01')
-    return df
+@st.cache_data(ttl=3600)
+def fetch_data(symbol, start, end):
+    return yf.download(symbol, start=start, end=end)
 
 def load_model(symbol):
-    # For now, assume 1 model for all coins
-    return joblib.load("crypto_model.pkl")
+    try:
+        return joblib.load(f"models/{symbol}_model.pkl")
+    except:
+        st.warning("No existing model found for this coin. Please retrain.")
+        return None
 
-def predict_next_day_movement(model, data):
-    data_feat = add_features(data)
-    latest = data_feat.iloc[[-1]]
-    features = ['RSI', 'MACD', 'MACD_Signal', 'MACD_Hist', 'SMA_20', 'SMA_50', 'Momentum']
-    X_latest = latest[features]
-    pred = model.predict(X_latest)[0]
-    prob = model.predict_proba(X_latest)[0]
-    return pred, prob, data_feat
-
-def backtest_model(model, data_feat):
-    data_feat['Target'] = (data_feat['Close'].shift(-1) > data_feat['Close']).astype(int)
-    features = ['RSI', 'MACD', 'MACD_Signal', 'MACD_Hist', 'SMA_20', 'SMA_50', 'Momentum']
-    X = data_feat[features]
-    y = data_feat['Target']
-    preds = model.predict(X)
-    data_feat['Predicted'] = preds
-    data_feat['Correct'] = (preds == y).astype(int)
-    accuracy = data_feat['Correct'].mean()
-    return data_feat, accuracy
-
-if st.button("Run Prediction"):
-    with st.spinner(f"Fetching {coin_name} data and predicting..."):
-        df = fetch_data(symbol)
+if action == "Run Prediction":
+    with st.spinner("Fetching data and predicting..."):
+        df = fetch_data(crypto_symbol, start_date, end_date)
         if df.empty:
             st.error("❌ Failed to load data.")
         else:
-            model = load_model(symbol)
-            prediction, probabilities, df_feat = predict_next_day_movement(model, df)
-
-            close_price = float(df['Close'].iloc[-1])
-            st.markdown(f"### Latest {coin_name} Close Price: ${close_price:,.2f}")
-
-            if prediction == 1:
-                st.success("📈 Prediction for tomorrow: **UP**")
+            model = load_model(crypto_symbol)
+            if model is None:
+                st.info("Please retrain the model first.")
             else:
-                st.error("📉 Prediction for tomorrow: **DOWN**")
+                data_feat = add_features(df)
+                latest = data_feat.iloc[[-1]]
+                features = ['RSI', 'MACD', 'MACD_Signal', 'MACD_Hist', 'SMA_20', 'SMA_50', 'Momentum']
+                X_latest = latest[features]
+                pred = model.predict(X_latest)[0]
+                prob = model.predict_proba(X_latest)[0]
 
-            st.markdown(f"""
-            **Confidence**  
-            - Up = {probabilities[1]*100:.2f}%  
-            - Down = {probabilities[0]*100:.2f}%  
-            """)
+                st.metric("Latest Close Price", f"${df['Close'].iloc[-1]:,.2f}")
+                st.metric("Prediction for Tomorrow", "UP" if pred == 1 else "DOWN")
+                st.write(f"Confidence - Up: {prob[1]*100:.2f}%, Down: {prob[0]*100:.2f}%")
 
-            st.subheader("📊 Close Price History")
-            st.line_chart(df['Close'])
+                st.subheader("Close Price History")
+                st.line_chart(df['Close'])
 
-            # Backtest
-            st.subheader("📉 Backtest Model Accuracy")
-            backtested_df, acc = backtest_model(model, df_feat.copy())
-            st.write(f"Historical Accuracy: **{acc*100:.2f}%**")
+elif action == "Retrain Model":
+    st.info("Training model with selected data range. This may take some time.")
+    df = fetch_data(crypto_symbol, start_date, end_date)
+    if df.empty:
+        st.error("❌ Failed to load data.")
+    else:
+        X, y = prepare_training_data(df)
+        from sklearn.ensemble import RandomForestClassifier
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X, y)
+        joblib.dump(model, f"models/{crypto_symbol}_model.pkl")
+        st.success("✅ Model retrained and saved successfully!")
 
-            # Predictions vs Actual
-            st.subheader("📈 Predictions vs Actual Movements")
-            plot_df = backtested_df[-50:].copy()
-            plot_df['Actual'] = plot_df['Target'].map({1: 'Up', 0: 'Down'})
-            plot_df['Predicted'] = plot_df['Predicted'].map({1: 'Up', 0: 'Down'})
-            st.dataframe(plot_df[['Close', 'Actual', 'Predicted']].style.highlight_between(axis=1, color='lightgreen'))
-
-            # Indicators
-            st.subheader("📉 Technical Indicators")
-            fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-            ax[0].plot(df_feat['Close'], label='Close Price')
-            ax[0].plot(df_feat['SMA_20'], label='SMA 20')
-            ax[0].plot(df_feat['SMA_50'], label='SMA 50')
-            ax[0].legend()
-            ax[0].set_title(f'{coin_name} Price and SMAs')
-            ax[1].plot(df_feat['MACD'], label='MACD')
-            ax[1].plot(df_feat['MACD_Signal'], label='Signal Line')
-            ax[1].bar(df_feat.index, df_feat['MACD_Hist'], label='Histogram')
-            ax[1].legend()
-            ax[1].set_title('MACD Indicators')
-            st.pyplot(fig)
-else:
-    st.info("Click the button above to predict tomorrow's movement.")
