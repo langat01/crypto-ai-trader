@@ -1,110 +1,112 @@
-import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 from sklearn.metrics import classification_report, accuracy_score
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-st.title("🔥 Breathing Fire into Crypto Investments (CryptoCompare API) 🔥")
-st.write("Predict next day price movement for popular cryptocurrencies using Random Forest.")
+# Fetch historical price data from CryptoCompare
+def fetch_crypto_data(symbol, limit=730):
+    url = f'https://min-api.cryptocompare.com/data/v2/histoday?fsym={symbol}&tsym=USD&limit={limit}'
+    response = requests.get(url)
+    data = response.json()
+    if data['Response'] != 'Success':
+        raise Exception(f"Failed to fetch data: {data.get('Message', 'Unknown error')}")
+    df = pd.DataFrame(data['Data']['Data'])
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('time', inplace=True)
+    return df[['open', 'high', 'low', 'close', 'volumeto', 'volumefrom']]
 
-cryptos = {
-    "Bitcoin": "BTC",
-    "Ethereum": "ETH",
-    "Binance Coin": "BNB",
-    "Cardano": "ADA",
-    "Solana": "SOL"
-}
-
-selected_crypto_name = st.selectbox("Select Cryptocurrency", list(cryptos.keys()))
-selected_crypto_symbol = cryptos[selected_crypto_name]
-
-@st.cache_data(show_spinner=False)
-def fetch_data_cryptocompare(symbol, limit=730):
-    """
-    Fetch daily OHLCV data from CryptoCompare API.
-    limit: number of days to fetch (max 2000)
-    """
-    url = f"https://min-api.cryptocompare.com/data/v2/histoday"
-    params = {
-        "fsym": symbol,
-        "tsym": "USD",
-        "limit": limit,
-        "aggregate": 1
-    }
-    try:
-        r = requests.get(url, params=params)
-        r.raise_for_status()
-        data = r.json()
-        if data['Response'] != 'Success':
-            raise ValueError(f"CryptoCompare API error: {data.get('Message', 'Unknown error')}")
-        raw = data['Data']['Data']
-        df = pd.DataFrame(raw)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-        df.set_index('time', inplace=True)
-        # Rename columns to match our feature engineering expectations
-        df.rename(columns={'open':'open', 'high':'high', 'low':'low', 'close':'close', 'volumefrom':'volume', 'volumeto':'volumeto'}, inplace=True)
-        df = df[['open','high','low','close','volume']].astype(float)
-        return df
-    except Exception as e:
-        st.error(f"Failed to fetch data from CryptoCompare: {e}")
-        return pd.DataFrame()
-
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0).rolling(window=period).mean()
-    loss = -delta.clip(upper=0).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def create_features(df):
+# Calculate technical indicators
+def add_technical_indicators(df):
     df = df.copy()
-    df['return'] = df['close'].pct_change()
-    df['sma_5'] = df['close'].rolling(window=5).mean()
-    df['sma_10'] = df['close'].rolling(window=10).mean()
-    df['rsi_14'] = compute_rsi(df['close'], 14)
-    df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
-    df = df.dropna()
+    # Simple Moving Averages
+    df['SMA_10'] = df['close'].rolling(window=10).mean()
+    df['SMA_30'] = df['close'].rolling(window=30).mean()
+    
+    # RSI
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    RS = gain / loss
+    df['RSI'] = 100 - (100 / (1 + RS))
+    
+    # Momentum
+    df['Momentum'] = df['close'] - df['close'].shift(10)
+    
+    # MACD
+    exp1 = df['close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp1 - exp2
+    
+    # Volume change
+    df['Vol_Change'] = df['volumeto'].pct_change()
+    
+    # Drop rows with NaN
+    df.dropna(inplace=True)
     return df
 
-def train_model(df):
-    features = ['return', 'sma_5', 'sma_10', 'rsi_14']
-    X = df[features]
-    y = df['target']
+# Prepare labels: 1 if next day's close > today close, else 0
+def prepare_labels(df):
+    df['Target'] = (df['close'].shift(-1) > df['close']).astype(int)
+    df.dropna(inplace=True)
+    return df
+
+# Prepare features and labels for ML
+def prepare_features_labels(df):
+    X = df[['SMA_10', 'SMA_30', 'RSI', 'Momentum', 'MACD', 'Vol_Change']]
+    y = df['Target']
+    return X, y
+
+# Train/test split and model training function
+def train_model(X, y, model_type='random_forest'):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    acc = accuracy_score(y_test, preds)
-    report = classification_report(y_test, preds)
-    return model, acc, report
-
-def predict_next_day(model, df):
-    features = ['return', 'sma_5', 'sma_10', 'rsi_14']
-    last_row = df.iloc[-1:]
-    X_last = last_row[features]
-    prediction = model.predict(X_last)[0]
-    return prediction
-
-def main():
-    st.info("Fetching data from CryptoCompare API...")
-    df = fetch_data_cryptocompare(selected_crypto_symbol)
-    if df.empty:
-        st.error("Failed to load data. Please try again later or select another crypto.")
-        return
-
-    df = create_features(df)
-    model, acc, report = train_model(df)
-    st.write(f"Model accuracy on test set: **{acc:.2%}**")
-    st.text("Classification report:\n" + report)
-
-    prediction = predict_next_day(model, df)
-    if prediction == 1:
-        st.success("Model predicts the price will **go UP** tomorrow.")
+    
+    if model_type == 'random_forest':
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+    elif model_type == 'xgboost':
+        model = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42)
     else:
-        st.error("Model predicts the price will **go DOWN** tomorrow.")
+        raise ValueError("Invalid model_type, choose 'random_forest' or 'xgboost'")
+    
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    
+    accuracy = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred)
+    return model, accuracy, report, X_test, y_test, y_pred
 
+# Plot feature importance for the model
+def plot_feature_importance(model, feature_names):
+    if hasattr(model, 'feature_importances_'):
+        importances = model.feature_importances_
+    else:
+        print("Model does not support feature importances")
+        return
+    
+    indices = np.argsort(importances)[::-1]
+    plt.figure(figsize=(8, 5))
+    sns.barplot(x=importances[indices], y=np.array(feature_names)[indices])
+    plt.title('Feature Importances')
+    plt.show()
+
+# Example usage
 if __name__ == "__main__":
-    main()
+    symbol = 'BTC'  # Change to any symbol supported by CryptoCompare, e.g. ETH, SOL
+    print(f"Fetching data for {symbol}...")
+    df = fetch_crypto_data(symbol)
+    df = add_technical_indicators(df)
+    df = prepare_labels(df)
+    X, y = prepare_features_labels(df)
+    
+    print("Training model...")
+    model, accuracy, report, X_test, y_test, y_pred = train_model(X, y, model_type='xgboost')
+    
+    print(f"Model accuracy on test set: {accuracy*100:.2f}%")
+    print("Classification report:")
+    print(report)
+    
+    plot_feature_importance(model, X.columns)
