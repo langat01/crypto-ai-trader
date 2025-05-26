@@ -7,225 +7,126 @@ import requests
 from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, accuracy_score
 from xgboost import XGBClassifier
-import os
-import platform
-from io import BytesIO
-import base64
-
-# Cross-platform sound alerts
-def play_sound(frequency, duration):
-    try:
-        if platform.system() == 'Windows':
-            import winsound
-            winsound.Beep(frequency, duration)
-        else:
-            os.system(f'play -nq -t alsa synth {duration/1000} sine {frequency}')
-    except Exception as e:
-        st.warning(f"Sound alert failed: {str(e)}")
+import winsound
 
 st.set_page_config(layout="wide")
-st.title("🐉 Dragon Trading AI Dashboard 2.0")
+st.title("🐉 Dragon Trading AI Dashboard")
 st.markdown("""
-Enhanced with real-time updates, cross-platform alerts, advanced portfolio tracking, 
-and additional technical indicators. Supports both Windows and Unix systems.
+Real-time candlestick chart, volume tracking, technical indicators, live prediction alerts, model switching, and backtesting.
 """)
 
-# Initialize session state
-if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = {
-        "capital": 10000,
-        "position": 0,
-        "holding": False,
-        "entry_price": 0.0,
-        "history": []
-    }
-
-if 'last_processed' not in st.session_state:
-    st.session_state.last_processed = None
-
-# Sidebar configuration
+# Sidebar Configuration
 st.sidebar.header("Configuration")
-crypto = st.sidebar.selectbox("Cryptocurrency", ["BTC", "ETH", "SOL", "ADA", "BNB"])
+crypto = st.sidebar.selectbox("Select Cryptocurrency", ["BTC", "ETH", "SOL", "ADA"])
 ticker = crypto + "USDT"
-interval = st.sidebar.selectbox("Interval", ["1m", "5m", "15m", "30m", "1h"])
-model_type = st.sidebar.selectbox("AI Model", ["Random Forest", "XGBoost", "LSTM (Experimental)"])
-enable_sound = st.sidebar.checkbox("Enable Sound Alerts", True)
-enable_shorting = st.sidebar.checkbox("Enable Short Positions", False)
+interval = "1m"
+limit = 200
+model_choice = st.sidebar.radio("Select Model", ["Random Forest", "XGBoost"])
 
-# Backtest date range
-backtest_start = st.sidebar.date_input("Backtest Start Date", pd.to_datetime("2023-01-01"))
-backtest_end = st.sidebar.date_input("Backtest End Date", pd.to_datetime("today"))
+# Sound Alert
+ALERT_SOUND = 523  # C note frequency
+DURATION = 600  # Milliseconds
 
-@st.cache_data(ttl=30)
-def fetch_binance_data(symbol="BTCUSDT", interval="1m", limit=500):
+def fetch_binance_data(symbol="BTCUSDT", interval="1m", limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     data = requests.get(url).json()
-    df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','close_time',
-                                    'qav','num_trades','taker_base_vol','taker_quote_vol','ignore'])
+    df = pd.DataFrame(data, columns=['time','open','high','low','close','volume','close_time','qav','num_trades','taker_base_vol','taker_quote_vol','ignore'])
     df['time'] = pd.to_datetime(df['time'], unit='ms')
-    return df.set_index('time')[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    df.set_index('time', inplace=True)
+    df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    return df
 
 def compute_indicators(df):
-    # Price transformations
-    df['returns'] = df['close'].pct_change()
-    
-    # Trend indicators
-    df['sma_20'] = df['close'].rolling(20).mean()
-    df['sma_50'] = df['close'].rolling(50).mean()
-    df['ema_12'] = df['close'].ewm(span=12).mean()
-    df['ema_26'] = df['close'].ewm(span=26).mean()
-    
-    # Volatility indicators
-    df['atr'] = df['high'].combine(df['low'], np.maximum) - df['high'].combine(df['low'], np.minimum)
-    df['bb_upper'] = df['sma_20'] + 2*df['close'].rolling(20).std()
-    df['bb_lower'] = df['sma_20'] - 2*df['close'].rolling(20).std()
-    
-    # Momentum indicators
+    df['return'] = df['close'].pct_change()
+    df['sma_5'] = df['close'].rolling(5).mean()
+    df['sma_10'] = df['close'].rolling(10).mean()
     df['rsi_14'] = compute_rsi(df['close'])
     df['macd'], df['macd_signal'] = compute_macd(df['close'])
-    df['stoch_k'], df['stoch_d'] = compute_stoch(df['high'], df['low'], df['close'])
-    df['adx'] = compute_adx(df['high'], df['low'], df['close'])
-    
-    # Volume indicators
-    df['obv'] = compute_obv(df['close'], df['volume'])
-    
-    # Target variable
-    df['target'] = (df['close'].shift(-5) > df['close']).astype(int)
+    df['momentum'] = df['close'] - df['close'].shift(10)
+    df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
     return df.dropna()
 
 def compute_rsi(series, period=14):
     delta = series.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = -delta.clip(upper=0).rolling(period).mean()
+    gain = delta.clip(lower=0).rolling(window=period).mean()
+    loss = -delta.clip(upper=0).rolling(window=period).mean()
     rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-def compute_macd(series, fast=12, slow=26, signal=9):
-    ema_fast = series.ewm(span=fast).mean()
-    ema_slow = series.ewm(span=slow).mean()
-    macd = ema_fast - ema_slow
-    signal = macd.ewm(span=signal).mean()
+def compute_macd(series):
+    exp1 = series.ewm(span=12, adjust=False).mean()
+    exp2 = series.ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
     return macd, signal
 
-def compute_stoch(high, low, close, k_period=14, d_period=3):
-    lowest_low = low.rolling(k_period).min()
-    highest_high = high.rolling(k_period).max()
-    k = 100 * (close - lowest_low) / (highest_high - lowest_low)
-    d = k.rolling(d_period).mean()
-    return k, d
-
-def compute_adx(high, low, close, period=14):
-    pass  # Implementation omitted for brevity
-
-def compute_obv(close, volume):
-    return np.sign(close.diff()) * volume
-
-def train_model(df, model_type):
-    features = ['returns', 'sma_20', 'sma_50', 'ema_12', 'ema_26', 
-               'rsi_14', 'macd', 'macd_signal', 'stoch_k', 'stoch_d',
-               'bb_upper', 'bb_lower', 'obv', 'atr']
+def train_model(df, model_type="Random Forest"):
+    features = ['return', 'sma_5', 'sma_10', 'rsi_14', 'macd', 'macd_signal', 'momentum']
     X = df[features]
     y = df['target']
-    
-    if model_type == "Random Forest":
-        model = RandomForestClassifier(n_estimators=200, class_weight='balanced')
-    elif model_type == "XGBoost":
-        model = XGBClassifier(n_estimators=300, learning_rate=0.05, use_label_encoder=False)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=0.2)
+
+    if model_type == "XGBoost":
+        model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
     else:
-        from tensorflow.keras.models import Sequential
-        model = Sequential()  # Simplified LSTM implementation
-        
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        model = RandomForestClassifier(n_estimators=100)
+
     model.fit(X_train, y_train)
-    return model, accuracy_score(y_test, model.predict(X_test))
+    acc = model.score(X_test, y_test)
+    return model, acc, X_test, y_test
 
-def execute_trade(prediction, current_price, portfolio, fee=0.0002):
-    if prediction == 1 and not portfolio['holding']:
-        # Long entry
-        portfolio['position'] = (portfolio['capital'] * (1 - fee)) / current_price
-        portfolio['capital'] = 0
-        portfolio['holding'] = 'long'
-        portfolio['entry_price'] = current_price
-        portfolio['history'].append(('long', current_price, datetime.now()))
-        
-    elif prediction == -1 and enable_shorting and not portfolio['holding']:
-        # Short entry
-        portfolio['position'] = (portfolio['capital'] * (1 - fee)) / current_price
-        portfolio['capital'] = 0
-        portfolio['holding'] = 'short'
-        portfolio['entry_price'] = current_price
-        portfolio['history'].append(('short', current_price, datetime.now()))
-        
-    elif prediction == 0 and portfolio['holding']:
-        # Exit position
-        multiplier = 1 if portfolio['holding'] == 'long' else -1
-        exit_value = portfolio['position'] * current_price * (1 + multiplier * (current_price - portfolio['entry_price'])/portfolio['entry_price'])
-        portfolio['capital'] = exit_value * (1 - fee)
-        portfolio['position'] = 0
-        portfolio['holding'] = False
-        portfolio['history'][-1] = (*portfolio['history'][-1], current_price, datetime.now()))
-        
-    return portfolio
+def predict_next(model, df):
+    last = df.iloc[-1:]
+    features = ['return', 'sma_5', 'sma_10', 'rsi_14', 'macd', 'macd_signal', 'momentum']
+    pred = model.predict(last[features])[0]
+    return pred
 
-# Main dashboard
-try:
-    df = fetch_binance_data(ticker, interval)
+def alert(pred):
+    if pred == 1:
+        winsound.Beep(ALERT_SOUND, DURATION)
+        st.success("🔊 Prediction: Price will go UP")
+    else:
+        st.error("🔊 Prediction: Price will go DOWN")
+
+# Fetch and process
+with st.spinner("Fetching data and making predictions..."):
+    df = fetch_binance_data(ticker, interval, limit)
     df = compute_indicators(df)
-    current_price = df['close'].iloc[-1]
-    
-    model, accuracy = train_model(df, model_type)
-    prediction = model.predict(df.iloc[-1:][features])[0]
-    
-    # Update portfolio
-    if st.session_state.last_processed != df.index[-1]:
-        st.session_state.portfolio = execute_trade(prediction, current_price, st.session_state.portfolio)
-        st.session_state.last_processed = df.index[-1]
-    
-    # Alert system
-    if enable_sound:
-        if prediction == 1:
-            play_sound(880, 500)
-        elif prediction == -1:
-            play_sound(440, 500)
-        else:
-            play_sound(660, 300)
-    
-    # Portfolio metrics
-    portfolio_value = st.session_state.portfolio['capital'] + \
-                    st.session_state.portfolio['position'] * current_price
-    st.metric("Portfolio Value", f"${portfolio_value:,.2f}", 
-             delta=f"{(portfolio_value - 10000)/100:.2f}%")
-    
-    # Main chart
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'],
-                                low=df['low'], close=df['close'], name="Price"))
-    fig.add_trace(go.Scatter(x=df.index, y=df['sma_20'], line=dict(color='orange'), name="SMA 20"))
-    fig.add_trace(go.Scatter(x=df.index, y=df['bb_upper'], line=dict(color='purple', dash='dot'), name="Bollinger Upper"))
-    fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], line=dict(color='purple', dash='dot'), name="Bollinger Lower"))
-    fig.update_layout(height=600, xaxis_rangeslider_visible=False)
-    
-    # Indicator subplots
-    fig.add_trace(go.Bar(x=df.index, y=df['volume'], name="Volume"), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['rsi_14'], line=dict(color='blue'), name="RSI"), row=3, col=1)
-    fig.update_layout(grid={"rows": 3, "columns": 1, "pattern": "independent"})
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Trading history
-    st.subheader("Trade History")
-    history_df = pd.DataFrame(st.session_state.portfolio['history'], 
-                             columns=['Type', 'Entry', 'Entry Time', 'Exit', 'Exit Time'])
-    st.dataframe(history_df.style.format({
-        'Entry': '${:.2f}', 'Exit': '${:.2f}',
-        'Entry Time': lambda x: x.strftime('%Y-%m-%d %H:%M'),
-        'Exit Time': lambda x: x.strftime('%Y-%m-%d %H:%M') if x else ''
-    }))
-    
-except Exception as e:
-    st.error(f"Error initializing dashboard: {str(e)}")
+    model, acc, X_test, y_test = train_model(df, model_choice)
+    pred = predict_next(model, df)
+    alert(pred)
+    st.metric("Model Accuracy", f"{acc:.2%}")
 
-# Auto-refresh every 60 seconds
-time.sleep(60)
-st.experimental_rerun()
+# Real-time Chart
+fig = go.Figure(data=[
+    go.Candlestick(x=df.index,
+                   open=df['open'], high=df['high'],
+                   low=df['low'], close=df['close'], name='Candles'),
+    go.Bar(x=df.index, y=df['volume'], name='Volume', yaxis='y2', marker_color='rgba(100,100,255,0.3)')
+])
+fig.update_layout(
+    title=f"{ticker} Live Candlestick Chart with Volume",
+    xaxis_rangeslider_visible=False,
+    yaxis_title="Price (USD)",
+    yaxis2=dict(overlaying='y', side='right', showgrid=False, title='Volume'),
+    template="plotly_dark"
+)
+st.plotly_chart(fig, use_container_width=True)
+
+# Backtesting visualization
+st.subheader("📈 Backtesting Strategy vs. Market")
+df['prediction'] = model.predict(df[['return', 'sma_5', 'sma_10', 'rsi_14', 'macd', 'macd_signal', 'momentum']])
+df['strategy_returns'] = df['return'] * df['prediction'].shift(1)
+df['market_returns'] = df['return']
+
+cumulative_strategy = (df['strategy_returns'] + 1).cumprod()
+cumulative_market = (df['market_returns'] + 1).cumprod()
+
+bt_fig = go.Figure()
+bt_fig.add_trace(go.Scatter(x=df.index, y=cumulative_strategy, name='Strategy'))
+bt_fig.add_trace(go.Scatter(x=df.index, y=cumulative_market, name='Market'))
+bt_fig.update_layout(title="Backtesting Cumulative Returns", template="plotly_dark")
+st.plotly_chart(bt_fig, use_container_width=True)
