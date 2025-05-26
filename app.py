@@ -2,19 +2,16 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
+import time
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 import plotly.graph_objs as go
 
-# Page config
 st.set_page_config(page_title="Dragon Trading AI", page_icon="🐉", layout="wide")
+st.title("🐉 Dragon Trading AI - Real-Time Price & Prediction")
+st.markdown("Predict next day price movement and watch live price updates for popular cryptocurrencies.")
 
-# Title and subtitle
-st.title("🐉 Dragon Trading AI")
-st.markdown("### Predict next day price movement for popular cryptocurrencies using Random Forest and technical indicators.")
-
-# Cryptos dictionary
 cryptos = {
     "Bitcoin (BTC)": "BTC",
     "Ethereum (ETH)": "ETH",
@@ -23,7 +20,6 @@ cryptos = {
     "Solana (SOL)": "SOL"
 }
 
-# User inputs
 selected_crypto_name = st.selectbox("Select Cryptocurrency", list(cryptos.keys()))
 selected_crypto_symbol = cryptos[selected_crypto_name]
 
@@ -82,75 +78,28 @@ def train_model(df):
     report = classification_report(y_test, preds)
     return model, acc, report, X_test, y_test
 
-def plot_price_and_indicators(df):
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df.index,
-                                 open=df['open'],
-                                 high=df['high'],
-                                 low=df['low'],
-                                 close=df['close'],
-                                 name='Price'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['sma_5'], line=dict(color='blue', width=1), name='SMA 5'))
-    fig.add_trace(go.Scatter(x=df.index, y=df['sma_10'], line=dict(color='orange', width=1), name='SMA 10'))
-    fig.update_layout(title="Price Chart with SMAs", xaxis_title="Date", yaxis_title="Price (USD)")
-    st.plotly_chart(fig, use_container_width=True)
-
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=df.index, y=df['rsi_14'], line=dict(color='purple', width=2), name='RSI 14'))
-    fig2.update_layout(title="Relative Strength Index (RSI 14)", xaxis_title="Date", yaxis_title="RSI",
-                       yaxis=dict(range=[0,100]))
-    st.plotly_chart(fig2, use_container_width=True)
-
-def plot_feature_importance(model, features):
-    importances = model.feature_importances_
-    fig = go.Figure([go.Bar(x=features, y=importances, marker_color='firebrick')])
-    fig.update_layout(title="Feature Importances", yaxis_title="Importance")
-    st.plotly_chart(fig, use_container_width=True)
-
-def backtest_strategy(df, X_test, y_test, model):
-    # Predict on test set
-    preds = model.predict(X_test)
-    test_dates = X_test.index
-    df_test = df.loc[test_dates].copy()
-    df_test['prediction'] = preds
-    df_test['actual'] = y_test
-
-    # Strategy returns:
-    # If prediction == 1 (price UP), assume buy and get next day return; else 0 return (stay out)
-    df_test['strategy_return'] = 0.0
-    # The return is the next day close pct change, so we shift -1 relative to current day
-    # But since target is close.shift(-1) > close, we can use actual returns
-    df_test['strategy_return'] = np.where(df_test['prediction'] == 1, df_test['return'], 0)
-
-    df_test['cumulative_strategy_return'] = (1 + df_test['strategy_return']).cumprod() - 1
-    df_test['cumulative_buy_and_hold'] = (1 + df_test['return']).cumprod() - 1
-
-    st.markdown("### Backtesting & Strategy Performance")
-
-    # Show metrics
-    correct_preds = (df_test['prediction'] == df_test['actual']).sum()
-    total_preds = len(df_test)
-    accuracy = correct_preds / total_preds
-    st.write(f"Backtest Accuracy on Test Set: **{accuracy:.2%}**")
-    st.write(f"Total Predictions: {total_preds}")
-    st.write(f"Correct Predictions: {correct_preds}")
-
-    # Plot cumulative returns
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_test.index, y=df_test['cumulative_strategy_return'],
-                             mode='lines', name='Strategy Cumulative Return'))
-    fig.add_trace(go.Scatter(x=df_test.index, y=df_test['cumulative_buy_and_hold'],
-                             mode='lines', name='Buy and Hold Return'))
-    fig.update_layout(title="Cumulative Returns: Strategy vs Buy and Hold",
-                      xaxis_title="Date", yaxis_title="Cumulative Return")
-    st.plotly_chart(fig, use_container_width=True)
+def fetch_realtime_price(symbol):
+    # CryptoCompare price endpoint
+    url = "https://min-api.cryptocompare.com/data/price"
+    params = {
+        "fsym": symbol,
+        "tsyms": "USD"
+    }
+    try:
+        r = requests.get(url, params=params)
+        r.raise_for_status()
+        price = r.json().get("USD", None)
+        return price
+    except Exception as e:
+        st.warning(f"Failed to fetch real-time price: {e}")
+        return None
 
 def main():
     try:
-        with st.spinner("Fetching data from CryptoCompare API..."):
+        with st.spinner("Fetching historical data..."):
             df = fetch_data_cryptocompare(selected_crypto_symbol, limit=days)
         if df.empty:
-            st.error("Failed to load data. Please try again later or select another cryptocurrency.")
+            st.error("Failed to load historical data. Try again or select another cryptocurrency.")
             return
 
         df = create_features(df)
@@ -167,12 +116,21 @@ def main():
         else:
             st.error("🔴 Model predicts the price will **go DOWN** tomorrow.")
 
-        plot_price_and_indicators(df)
-        plot_feature_importance(model, ['return', 'sma_5', 'sma_10', 'rsi_14'])
+        # Real-time price live update area
+        st.markdown("### Real-Time Price (updates every 10 seconds)")
 
-        # Backtesting section (expandable)
-        with st.expander("Backtesting & Strategy Performance"):
-            backtest_strategy(df, X_test, y_test, model)
+        price_placeholder = st.empty()
+        last_price = None
+
+        for _ in range(30):  # Run loop 30 times (~5 min)
+            price = fetch_realtime_price(selected_crypto_symbol)
+            if price is not None:
+                if price != last_price:
+                    price_placeholder.markdown(f"**Current {selected_crypto_name} Price:** ${price:,.2f} USD")
+                    last_price = price
+            time.sleep(10)
+
+        st.markdown("Stream finished updating real-time prices.")
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
