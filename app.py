@@ -7,27 +7,31 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 import plotly.graph_objs as go
 
-st.set_page_config(page_title="🔥 Crypto Price Movement Predictor 🔥", layout="wide")
+# Page config
+st.set_page_config(page_title="Dragon Trading AI", page_icon="🐉", layout="wide")
 
-st.title("🔥 Breathing Fire into Crypto Investments (CryptoCompare API) 🔥")
-st.write("Predict next day price movement for popular cryptocurrencies using Random Forest.")
+# Title and subtitle
+st.title("🐉 Dragon Trading AI")
+st.markdown("### Predict next day price movement for popular cryptocurrencies using Random Forest and technical indicators.")
 
+# Cryptocurrencies dictionary
 cryptos = {
-    "Bitcoin": "BTC",
-    "Ethereum": "ETH",
-    "Binance Coin": "BNB",
-    "Cardano": "ADA",
-    "Solana": "SOL"
+    "Bitcoin (BTC)": "BTC",
+    "Ethereum (ETH)": "ETH",
+    "Binance Coin (BNB)": "BNB",
+    "Cardano (ADA)": "ADA",
+    "Solana (SOL)": "SOL"
 }
 
+# User input: select crypto and days of data
 selected_crypto_name = st.selectbox("Select Cryptocurrency", list(cryptos.keys()))
 selected_crypto_symbol = cryptos[selected_crypto_name]
 
-days = st.slider("Select number of days of historical data:", min_value=180, max_value=1000, value=730, step=30)
+days = st.slider("Select number of days of historical data", min_value=180, max_value=1000, value=730, step=30)
 
 @st.cache_data(show_spinner=False)
 def fetch_data_cryptocompare(symbol, limit=730):
-    url = f"https://min-api.cryptocompare.com/data/v2/histoday"
+    url = "https://min-api.cryptocompare.com/data/v2/histoday"
     params = {
         "fsym": symbol,
         "tsym": "USD",
@@ -44,7 +48,7 @@ def fetch_data_cryptocompare(symbol, limit=730):
     df['time'] = pd.to_datetime(df['time'], unit='s')
     df.set_index('time', inplace=True)
     df.rename(columns={'open':'open', 'high':'high', 'low':'low', 'close':'close', 'volumefrom':'volume'}, inplace=True)
-    df = df[['open','high','low','close','volume']].astype(float)
+    df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
     return df
 
 def compute_rsi(series, period=14):
@@ -91,7 +95,6 @@ def plot_price_and_indicators(df):
     fig.update_layout(title="Price Chart with SMAs", xaxis_title="Date", yaxis_title="Price (USD)")
     st.plotly_chart(fig, use_container_width=True)
 
-    # RSI plot
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(x=df.index, y=df['rsi_14'], line=dict(color='purple', width=2), name='RSI 14'))
     fig2.update_layout(title="Relative Strength Index (RSI 14)", xaxis_title="Date", yaxis_title="RSI",
@@ -109,7 +112,7 @@ def main():
         with st.spinner("Fetching data from CryptoCompare API..."):
             df = fetch_data_cryptocompare(selected_crypto_symbol, limit=days)
         if df.empty:
-            st.error("Failed to load data. Please try again later or select another crypto.")
+            st.error("Failed to load data. Please try again later or select another cryptocurrency.")
             return
 
         df = create_features(df)
@@ -117,20 +120,20 @@ def main():
         with st.spinner("Training model..."):
             model, acc, report, X_test, y_test = train_model(df)
 
-        st.markdown(f"### Model accuracy on test set: **{acc:.2%}**")
-        st.text("Classification report:\n" + report)
+        st.markdown(f"### Model Accuracy on Test Set: **{acc:.2%}**")
+        st.text("Classification Report:\n" + report)
 
         prediction = model.predict(X_test.tail(1))[0]
         if prediction == 1:
-            st.success("Model predicts the price will **go UP** tomorrow.")
+            st.success("🟢 Model predicts the price will **go UP** tomorrow.")
         else:
-            st.error("Model predicts the price will **go DOWN** tomorrow.")
+            st.error("🔴 Model predicts the price will **go DOWN** tomorrow.")
 
         plot_price_and_indicators(df)
         plot_feature_importance(model, ['return', 'sma_5', 'sma_10', 'rsi_14'])
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     main()
