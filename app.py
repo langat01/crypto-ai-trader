@@ -1,146 +1,135 @@
 import streamlit as st
 import yfinance as yf
+import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import classification_report, accuracy_score
 
-# Constants
-START_DATE = "2021-01-01"
-TODAY = datetime.today().strftime('%Y-%m-%d')
+START_DATE = '2021-01-01'
 
-# ========== Data Fetching ==========
+st.title("🔥 Breathing Fire into Crypto Investments 🔥")
+st.write("Predict next day price movement for popular cryptocurrencies using Random Forest.")
 
+cryptos = {
+    "Bitcoin (BTC-USD)": "BTC-USD",
+    "Ethereum (ETH-USD)": "ETH-USD",
+    "Binance Coin (BNB-USD)": "BNB-USD",
+    "Cardano (ADA-USD)": "ADA-USD",
+    "Solana (SOL-USD)": "SOL-USD"
+}
+
+selected_crypto_name = st.selectbox("Select Cryptocurrency", list(cryptos.keys()))
+selected_crypto_symbol = cryptos[selected_crypto_name]
+
+@st.cache_data
 def fetch_data_yfinance(symbol):
     try:
         df = yf.download(symbol, start=START_DATE, progress=False)
-        # Flatten MultiIndex columns if present
+        # Handle MultiIndex columns by flattening
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(-1)
         df.columns = df.columns.str.lower()
-        df = df[['open','high','low','close','volume']].ffill().dropna()
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        if not all(col in df.columns for col in required_cols):
+            raise ValueError(f"Missing columns in data: {df.columns}")
+        df = df[required_cols].ffill().dropna()
         return df
     except Exception as e:
         st.warning(f"yFinance data fetch error: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600)
-def load_data(symbol):
-    df = fetch_data_yfinance(symbol)
-    if df.empty or len(df) < 100:
-        st.error("Failed to load enough data from yFinance. Please try again later or select another crypto.")
+@st.cache_data
+def fetch_data_coingecko(id):
+    url = f"https://api.coingecko.com/api/v3/coins/{id}/market_chart"
+    params = {"vs_currency": "usd", "days": "730", "interval": "daily"}
+    try:
+        r = requests.get(url, params=params)
+        r.raise_for_status()
+        data = r.json()
+        prices = data['prices']  # list of [timestamp, price]
+        df = pd.DataFrame(prices, columns=['timestamp', 'price'])
+        df['date'] = pd.to_datetime(df['timestamp'], unit='ms').dt.date
+        df.set_index('date', inplace=True)
+        df = df[['price']]
+        df['close'] = df['price']
+        df['open'] = df['price']
+        df['high'] = df['price']
+        df['low'] = df['price']
+        df['volume'] = np.nan  # CoinGecko doesn't provide volume here
+        df = df.drop(columns=['price'])
+        df = df.loc[START_DATE:]
+        df = df.ffill().dropna()
+        return df
+    except Exception as e:
+        st.warning(f"CoinGecko fetch error: {e}")
+        return pd.DataFrame()
+
+def create_features(df):
+    df['return'] = df['close'].pct_change()
+    df['sma_5'] = df['close'].rolling(window=5).mean()
+    df['sma_10'] = df['close'].rolling(window=10).mean()
+    df['rsi_14'] = compute_rsi(df['close'], 14)
+    df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+    df = df.dropna()
     return df
 
-# ========== Feature Engineering ==========
-
-def compute_rsi(data, window=14):
-    delta = data['close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -1 * delta.clip(upper=0)
-    avg_gain = gain.rolling(window=window).mean()
-    avg_loss = loss.rolling(window=window).mean()
-    rs = avg_gain / avg_loss
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def compute_macd(data, slow=26, fast=12, signal=9):
-    exp1 = data['close'].ewm(span=fast, adjust=False).mean()
-    exp2 = data['close'].ewm(span=slow, adjust=False).mean()
-    macd = exp1 - exp2
-    signal_line = macd.ewm(span=signal, adjust=False).mean()
-    return macd, signal_line
-
-def compute_sma(data, window):
-    return data['close'].rolling(window=window).mean()
-
-def compute_momentum(data, window=10):
-    momentum = data['close'] - data['close'].shift(window)
-    return momentum
-
-def add_features(df):
-    df['rsi'] = compute_rsi(df)
-    df['macd'], df['macd_signal'] = compute_macd(df)
-    df['sma_10'] = compute_sma(df, 10)
-    df['sma_20'] = compute_sma(df, 20)
-    df['momentum'] = compute_momentum(df)
-    df = df.dropna()
-    return df
-
-# ========== Prepare Dataset for ML ==========
-
-def prepare_dataset(df):
-    df['target'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)  # 1 = price up tomorrow, else 0
-    features = ['rsi', 'macd', 'macd_signal', 'sma_10', 'sma_20', 'momentum']
-    df = df.dropna()
+def train_model(df):
+    features = ['return', 'sma_5', 'sma_10', 'rsi_14']
     X = df[features]
     y = df['target']
-    return X, y
-
-# ========== Train Model ==========
-
-def train_model(X, y):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    return model, acc
-
-# ========== Predict Next Day Movement ==========
+    preds = model.predict(X_test)
+    acc = accuracy_score(y_test, preds)
+    report = classification_report(y_test, preds)
+    return model, acc, report
 
 def predict_next_day(model, df):
-    latest = df.iloc[-1]
-    features = ['rsi', 'macd', 'macd_signal', 'sma_10', 'sma_20', 'momentum']
-    X_latest = latest[features].values.reshape(1, -1)
-    pred = model.predict(X_latest)[0]
-    prob = model.predict_proba(X_latest)[0][pred]
-    return pred, prob
+    features = ['return', 'sma_5', 'sma_10', 'rsi_14']
+    last_row = df.iloc[-1:]
+    X_last = last_row[features]
+    prediction = model.predict(X_last)[0]
+    return prediction
 
-# ========== Streamlit App ==========
+def main():
+    df = fetch_data_yfinance(selected_crypto_symbol)
+    if df.empty:
+        st.info("Falling back to CoinGecko data source...")
+        # Map ticker symbol to CoinGecko ID
+        cg_map = {
+            "BTC-USD": "bitcoin",
+            "ETH-USD": "ethereum",
+            "BNB-USD": "binancecoin",
+            "ADA-USD": "cardano",
+            "SOL-USD": "solana"
+        }
+        df = fetch_data_coingecko(cg_map.get(selected_crypto_symbol, "bitcoin"))
 
-st.title("🔥 Breathing Fire into Crypto Investments 🔥")
-st.markdown("Predict next day price movement for popular cryptocurrencies using Random Forest.")
+    if df.empty:
+        st.error("Failed to load data. Please try again later or select another crypto.")
+        return
 
-# Select crypto
-options = {
-    "Bitcoin (BTC-USD)": "BTC-USD",
-    "Ethereum (ETH-USD)": "ETH-USD",
-    "Litecoin (LTC-USD)": "LTC-USD",
-    "Ripple (XRP-USD)": "XRP-USD",
-    "Bitcoin Cash (BCH-USD)": "BCH-USD",
-}
+    df = create_features(df)
+    model, acc, report = train_model(df)
+    st.write(f"Model accuracy on test set: **{acc:.2%}**")
+    st.text("Classification report:\n" + report)
 
-selected_name = st.selectbox("Select Cryptocurrency", list(options.keys()))
-symbol = options[selected_name]
-
-# Load data
-with st.spinner("Loading data..."):
-    data = load_data(symbol)
-
-if not data.empty:
-    st.subheader(f"Data Preview for {selected_name}")
-    st.line_chart(data['close'])
-
-    # Feature engineering
-    data_feat = add_features(data)
-
-    # Prepare ML dataset
-    X, y = prepare_dataset(data_feat)
-
-    if len(X) > 100:
-        # Train model
-        model, accuracy = train_model(X, y)
-        st.success(f"Model trained with accuracy: {accuracy:.2%}")
-
-        # Predict next day movement
-        pred, prob = predict_next_day(model, data_feat)
-        movement = "UP 📈" if pred == 1 else "DOWN 📉"
-        st.markdown(f"**Prediction for next trading day:** {movement} with probability {prob:.2%}")
-
+    prediction = predict_next_day(model, df)
+    if prediction == 1:
+        st.success("Model predicts the price will **go UP** tomorrow.")
     else:
-        st.error("Not enough data after feature engineering to train model.")
+        st.error("Model predicts the price will **go DOWN** tomorrow.")
 
-else:
-    st.error("Failed to load data. Please try again later or select another crypto.")
+if __name__ == "__main__":
+    main()
