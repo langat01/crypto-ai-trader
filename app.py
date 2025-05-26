@@ -23,24 +23,30 @@ cryptos = {
 selected_crypto_name = st.selectbox("Select Cryptocurrency", list(cryptos.keys()))
 selected_crypto_symbol = cryptos[selected_crypto_name]
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def fetch_data_yfinance(symbol):
     try:
         df = yf.download(symbol, start=START_DATE, progress=False)
-        # Handle MultiIndex columns by flattening
+        if df.empty:
+            raise ValueError("No data returned from yFinance.")
+        # Flatten MultiIndex columns if any
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(-1)
-        df.columns = df.columns.str.lower()
+            df.columns = [' '.join(col).strip() for col in df.columns.values]
+        df.columns = [col.lower().replace(' ', '_') for col in df.columns]
+
+        # Required columns: open, high, low, close, volume
         required_cols = ['open', 'high', 'low', 'close', 'volume']
-        if not all(col in df.columns for col in required_cols):
-            raise ValueError(f"Missing columns in data: {df.columns}")
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing columns from yFinance data: {missing_cols}")
+
         df = df[required_cols].ffill().dropna()
         return df
     except Exception as e:
         st.warning(f"yFinance data fetch error: {e}")
         return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def fetch_data_coingecko(id):
     url = f"https://api.coingecko.com/api/v3/coins/{id}/market_chart"
     params = {"vs_currency": "usd", "days": "730", "interval": "daily"}
@@ -48,17 +54,20 @@ def fetch_data_coingecko(id):
         r = requests.get(url, params=params)
         r.raise_for_status()
         data = r.json()
-        prices = data['prices']  # list of [timestamp, price]
+        prices = data.get('prices', [])
+        if not prices:
+            raise ValueError("No price data from CoinGecko.")
         df = pd.DataFrame(prices, columns=['timestamp', 'price'])
         df['date'] = pd.to_datetime(df['timestamp'], unit='ms').dt.date
         df.set_index('date', inplace=True)
         df = df[['price']]
-        df['close'] = df['price']
-        df['open'] = df['price']
-        df['high'] = df['price']
-        df['low'] = df['price']
-        df['volume'] = np.nan  # CoinGecko doesn't provide volume here
-        df = df.drop(columns=['price'])
+        # Fill OHLC columns with price as proxy (no detailed OHLC from CoinGecko here)
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col == 'volume':
+                df[col] = np.nan
+            else:
+                df[col] = df['price']
+        df.drop(columns=['price'], inplace=True)
         df = df.loc[START_DATE:]
         df = df.ffill().dropna()
         return df
@@ -66,7 +75,16 @@ def fetch_data_coingecko(id):
         st.warning(f"CoinGecko fetch error: {e}")
         return pd.DataFrame()
 
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0).rolling(window=period).mean()
+    loss = -delta.clip(upper=0).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
 def create_features(df):
+    df = df.copy()
     df['return'] = df['close'].pct_change()
     df['sma_5'] = df['close'].rolling(window=5).mean()
     df['sma_10'] = df['close'].rolling(window=10).mean()
@@ -74,14 +92,6 @@ def create_features(df):
     df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
     df = df.dropna()
     return df
-
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
 
 def train_model(df):
     features = ['return', 'sma_5', 'sma_10', 'rsi_14']
@@ -106,7 +116,6 @@ def main():
     df = fetch_data_yfinance(selected_crypto_symbol)
     if df.empty:
         st.info("Falling back to CoinGecko data source...")
-        # Map ticker symbol to CoinGecko ID
         cg_map = {
             "BTC-USD": "bitcoin",
             "ETH-USD": "ethereum",
