@@ -14,7 +14,7 @@ st.set_page_config(page_title="Dragon Trading AI", page_icon="🐉", layout="wid
 st.title("🐉 Dragon Trading AI")
 st.markdown("### Predict next day price movement for popular cryptocurrencies using Random Forest and technical indicators.")
 
-# Cryptocurrencies dictionary
+# Cryptos dictionary
 cryptos = {
     "Bitcoin (BTC)": "BTC",
     "Ethereum (ETH)": "ETH",
@@ -23,7 +23,7 @@ cryptos = {
     "Solana (SOL)": "SOL"
 }
 
-# User input: select crypto and days of data
+# User inputs
 selected_crypto_name = st.selectbox("Select Cryptocurrency", list(cryptos.keys()))
 selected_crypto_symbol = cryptos[selected_crypto_name]
 
@@ -107,6 +107,44 @@ def plot_feature_importance(model, features):
     fig.update_layout(title="Feature Importances", yaxis_title="Importance")
     st.plotly_chart(fig, use_container_width=True)
 
+def backtest_strategy(df, X_test, y_test, model):
+    # Predict on test set
+    preds = model.predict(X_test)
+    test_dates = X_test.index
+    df_test = df.loc[test_dates].copy()
+    df_test['prediction'] = preds
+    df_test['actual'] = y_test
+
+    # Strategy returns:
+    # If prediction == 1 (price UP), assume buy and get next day return; else 0 return (stay out)
+    df_test['strategy_return'] = 0.0
+    # The return is the next day close pct change, so we shift -1 relative to current day
+    # But since target is close.shift(-1) > close, we can use actual returns
+    df_test['strategy_return'] = np.where(df_test['prediction'] == 1, df_test['return'], 0)
+
+    df_test['cumulative_strategy_return'] = (1 + df_test['strategy_return']).cumprod() - 1
+    df_test['cumulative_buy_and_hold'] = (1 + df_test['return']).cumprod() - 1
+
+    st.markdown("### Backtesting & Strategy Performance")
+
+    # Show metrics
+    correct_preds = (df_test['prediction'] == df_test['actual']).sum()
+    total_preds = len(df_test)
+    accuracy = correct_preds / total_preds
+    st.write(f"Backtest Accuracy on Test Set: **{accuracy:.2%}**")
+    st.write(f"Total Predictions: {total_preds}")
+    st.write(f"Correct Predictions: {correct_preds}")
+
+    # Plot cumulative returns
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_test.index, y=df_test['cumulative_strategy_return'],
+                             mode='lines', name='Strategy Cumulative Return'))
+    fig.add_trace(go.Scatter(x=df_test.index, y=df_test['cumulative_buy_and_hold'],
+                             mode='lines', name='Buy and Hold Return'))
+    fig.update_layout(title="Cumulative Returns: Strategy vs Buy and Hold",
+                      xaxis_title="Date", yaxis_title="Cumulative Return")
+    st.plotly_chart(fig, use_container_width=True)
+
 def main():
     try:
         with st.spinner("Fetching data from CryptoCompare API..."):
@@ -131,6 +169,10 @@ def main():
 
         plot_price_and_indicators(df)
         plot_feature_importance(model, ['return', 'sma_5', 'sma_10', 'rsi_14'])
+
+        # Backtesting section (expandable)
+        with st.expander("Backtesting & Strategy Performance"):
+            backtest_strategy(df, X_test, y_test, model)
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
