@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from streamlit.components.v1 import html
+import time  # <-- Added for live updates
 
 # ====================== DRAGON THEME SETUP ======================
 st.set_page_config(page_title="Dragon Trading AI", layout="wide", page_icon="🐉")
@@ -205,117 +206,113 @@ def calculate_features(df):
         df['macd'] = ema12 - ema26
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
         df['macd_hist'] = df['macd'] - df['macd_signal']
-        df['momentum'] = df['close'] - df['close'].shift(4)
-        return df.dropna()
+        df['momentum'] = df['close'] - df['close'].shift(10)
+        df.fillna(method='bfill', inplace=True)
+        return df
     except Exception as e:
-        st.error(f"Feature error: {str(e)}")
-        return pd.DataFrame()
+        st.error(f"Feature calculation error: {e}")
+        return df
+
+def train_model(df):
+    try:
+        df = calculate_features(df)
+        df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+        df.dropna(inplace=True)
+        X = df[FEATURES]
+        y = df['target']
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
+        joblib.dump(model, MODEL_PATH)
+        return model, X_test, y_test
+    except Exception as e:
+        st.error(f"Model training error: {e}")
+        return None, None, None
 
 def load_model():
-    try:
-        if MODEL_PATH.exists():
-            return joblib.load(MODEL_PATH)
-        return None
-    except Exception as e:
-        st.error(f"Model load error: {str(e)}")
+    if MODEL_PATH.exists():
+        return joblib.load(MODEL_PATH)
+    else:
         return None
 
-def train_model(data, n_estimators=100, max_depth=5):
-    try:
-        df = calculate_features(data)
-        if len(df) < 100:
-            raise ValueError("Minimum 100 data points required")
-        df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
-        X = df[FEATURES].dropna()
-        y = df['target'].loc[X.index]
-        if len(X) < 50:
-            raise ValueError("Insufficient training samples")
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-        model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, random_state=42, class_weight='balanced')
-        model.fit(X_train, y_train)
-        accuracy = model.score(X_test, y_test)
-        joblib.dump(model, MODEL_PATH)
-        return model, accuracy, df
-    except Exception as e:
-        st.error(f"Training failed: {str(e)}")
-        return None, 0, pd.DataFrame()
+def predict(model, df):
+    df = calculate_features(df)
+    latest_features = df[FEATURES].iloc[-1].values.reshape(1, -1)
+    prediction = model.predict(latest_features)[0]
+    return prediction
 
-def predict(model, data):
-    try:
-        df = calculate_features(data)
-        latest = df[FEATURES].iloc[[-1]]
-        pred = model.predict(latest)[0]
-        proba = model.predict_proba(latest)[0]
-        return pred, proba, df
-    except Exception as e:
-        st.error(f"Prediction error: {str(e)}")
-        return None, None, pd.DataFrame()
+# ====================== APP LAYOUT ======================
+tab1, tab2 = st.tabs(["Dragon's Prophecy", "Dragon's Workshop"])
 
-def main():
-    st.sidebar.header("Dragon's Lair Configuration")
-    coin_name = st.sidebar.selectbox("Select Treasure", list(coin_mapping.keys()))
+# --- TAB 1 ---
+with tab1:
+    coin_name = st.selectbox("Choose your Dragon's Hoard (Crypto)", list(coin_mapping.keys()), index=0)
     symbol = coin_mapping[coin_name]
+
     df = fetch_data(symbol)
 
-    tab1, tab2 = st.tabs(["📜 Dragon's Scrolls", "⚔ Training Grounds"])
+    if not df.empty:
+        st.subheader(f"{coin_name} Gold Hoard Value")
+        st.line_chart(df['close'])
 
-    with tab1:
-        st.header("Dragon's Prophecy")
-        if not df.empty:
-            st.subheader(f"{coin_name} Gold Hoard Value")
-            st.line_chart(df['close'])
+        # ======= LIVE PRICE UPDATE BLOCK =======
+        st.subheader("Live Treasure Ticker")
+        price_placeholder = st.empty()
 
-            if st.button("Seek Dragon's Wisdom", type="primary"):
-                model = load_model()
-                if model:
-                    pred, proba, df_feat = predict(model, df)
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        current_price = df['close'].iloc[-1]
-                        st.metric("Current Treasure Value", f"${current_price:,.2f}")
-                    with col2:
-                        if pred is not None:
-                            direction = "🐉 FIRE BREATH (BUY)" if pred == 1 else "💤 HIBERNATE (HOLD)"
-                            confidence = proba[1] if pred == 1 else proba[0]
-                            st.metric("Dragon's Verdict", 
-                                    f"{direction}\n{confidence*100:.1f}% Confidence")
+        def get_live_price(symbol):
+            try:
+                ticker = yf.Ticker(symbol)
+                return ticker.history(period="1d")['Close'].iloc[-1]
+            except:
+                return None
 
-                    if pred is not None:
-                        try:
-                            df_feat['predicted'] = model.predict(df_feat[FEATURES])
-                            df_feat['target'] = (df_feat['close'].shift(-1) > df_feat['close']).astype(int)
-                            accuracy = (df_feat['predicted'] == df_feat['target']).mean()
-                            st.metric("Historical Accuracy", f"{accuracy*100:.1f}%")
-                        except Exception as e:
-                            st.warning(f"Accuracy calculation skipped: {str(e)}")
+        for _ in range(10):  # Refresh every 5 seconds, total ~50 seconds
+            live_price = get_live_price(symbol)
+            if live_price:
+                price_placeholder.metric("Live Price", f"${live_price:,.2f}")
+            else:
+                price_placeholder.warning("Live price unavailable.")
+            time.sleep(5)
 
-    with tab2:
-        st.header("Dragon Training Ritual")
-        st.subheader("Forge Your Predictor")
-        col1, col2 = st.columns(2)
-        with col1:
-            n_estimators = st.slider("Number of Dragon Eggs", 50, 200, 100)
-        with col2:
-            max_depth = st.slider("Dragon's Wisdom Depth", 3, 20, 7)
+        if st.button("Seek Dragon's Wisdom", type="primary"):
+            model = load_model()
+            if model is None:
+                st.info("Training the dragon's wisdom. This may take a moment...")
+                model, X_test, y_test = train_model(df)
+            else:
+                st.success("Dragon's wisdom is ready!")
 
-        if st.button("Begin Training Ritual", type="primary"):
-            if not df.empty:
-                with st.spinner("Feeding the dragon..."):
-                    model, accuracy, _ = train_model(df, n_estimators, max_depth)
-                    if model:
-                        st.success(f"🐉 Dragon trained! Accuracy: {accuracy*100:.1f}%")
-                        st.subheader("Dragon's Knowledge Map")
-                        importances = model.feature_importances_
-                        fig, ax = plt.subplots()
-                        ax.barh(FEATURES, importances)
-                        st.pyplot(fig)
+            if model:
+                pred = predict(model, df)
+                st.markdown(f"**Prediction:** The Dragon {'foresees a rise! 🐉📈' if pred == 1 else 'warns of a fall! 🐉📉'}")
+            else:
+                st.error("The Dragon is silent... Model not available.")
 
-    with st.expander("Ancient Cryptic Writings"):
-        if not df.empty:
-            st.write("*Data Summary*")
-            st.dataframe(df.describe())
-            st.write("*Recent Features*")
-            st.dataframe(calculate_features(df).tail(3))
+    else:
+        st.error("Unable to load data for your chosen hoard.")
 
-if _name_ == "_main_":
-    main()
+# --- TAB 2 ---
+with tab2:
+    st.header("Dragon's Workshop")
+    st.write("Forge your own dragon wisdom by uploading your data or training your own model here.")
+    uploaded_file = st.file_uploader("Upload your CSV with OHLCV", type=['csv'])
+
+    if uploaded_file:
+        user_df = pd.read_csv(uploaded_file)
+        user_df = normalize_columns(user_df)
+        st.write("Data Preview:")
+        st.dataframe(user_df.head())
+
+        if st.button("Train the Dragon on my Data"):
+            model, X_test, y_test = train_model(user_df)
+            if model:
+                st.success("Your dragon has been trained!")
+            else:
+                st.error("Training failed, check your data format.")
+
+    st.markdown("---")
+    st.markdown("**About Dragon Trading AI**")
+    st.write("""
+    This magical app uses mystical algorithms (Random Forest) combined with powerful market indicators (RSI, MACD, SMAs) to predict the crypto price movements.
+    """)
+
