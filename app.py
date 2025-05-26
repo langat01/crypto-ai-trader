@@ -1,5 +1,4 @@
 import streamlit as st
-import yfinance as yf
 import requests
 import pandas as pd
 import numpy as np
@@ -7,72 +6,49 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 
-START_DATE = '2021-01-01'
-
-st.title("🔥 Breathing Fire into Crypto Investments 🔥")
+st.title("🔥 Breathing Fire into Crypto Investments (CryptoCompare API) 🔥")
 st.write("Predict next day price movement for popular cryptocurrencies using Random Forest.")
 
 cryptos = {
-    "Bitcoin (BTC-USD)": "BTC-USD",
-    "Ethereum (ETH-USD)": "ETH-USD",
-    "Binance Coin (BNB-USD)": "BNB-USD",
-    "Cardano (ADA-USD)": "ADA-USD",
-    "Solana (SOL-USD)": "SOL-USD"
+    "Bitcoin": "BTC",
+    "Ethereum": "ETH",
+    "Binance Coin": "BNB",
+    "Cardano": "ADA",
+    "Solana": "SOL"
 }
 
 selected_crypto_name = st.selectbox("Select Cryptocurrency", list(cryptos.keys()))
 selected_crypto_symbol = cryptos[selected_crypto_name]
 
 @st.cache_data(show_spinner=False)
-def fetch_data_yfinance(symbol):
-    try:
-        df = yf.download(symbol, start=START_DATE, progress=False)
-        if df.empty:
-            raise ValueError("No data returned from yFinance.")
-        # Flatten MultiIndex columns if any
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [' '.join(col).strip() for col in df.columns.values]
-        df.columns = [col.lower().replace(' ', '_') for col in df.columns]
-
-        # Required columns: open, high, low, close, volume
-        required_cols = ['open', 'high', 'low', 'close', 'volume']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            raise ValueError(f"Missing columns from yFinance data: {missing_cols}")
-
-        df = df[required_cols].ffill().dropna()
-        return df
-    except Exception as e:
-        st.warning(f"yFinance data fetch error: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(show_spinner=False)
-def fetch_data_coingecko(id):
-    url = f"https://api.coingecko.com/api/v3/coins/{id}/market_chart"
-    params = {"vs_currency": "usd", "days": "730", "interval": "daily"}
+def fetch_data_cryptocompare(symbol, limit=730):
+    """
+    Fetch daily OHLCV data from CryptoCompare API.
+    limit: number of days to fetch (max 2000)
+    """
+    url = f"https://min-api.cryptocompare.com/data/v2/histoday"
+    params = {
+        "fsym": symbol,
+        "tsym": "USD",
+        "limit": limit,
+        "aggregate": 1
+    }
     try:
         r = requests.get(url, params=params)
         r.raise_for_status()
         data = r.json()
-        prices = data.get('prices', [])
-        if not prices:
-            raise ValueError("No price data from CoinGecko.")
-        df = pd.DataFrame(prices, columns=['timestamp', 'price'])
-        df['date'] = pd.to_datetime(df['timestamp'], unit='ms').dt.date
-        df.set_index('date', inplace=True)
-        df = df[['price']]
-        # Fill OHLC columns with price as proxy (no detailed OHLC from CoinGecko here)
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            if col == 'volume':
-                df[col] = np.nan
-            else:
-                df[col] = df['price']
-        df.drop(columns=['price'], inplace=True)
-        df = df.loc[START_DATE:]
-        df = df.ffill().dropna()
+        if data['Response'] != 'Success':
+            raise ValueError(f"CryptoCompare API error: {data.get('Message', 'Unknown error')}")
+        raw = data['Data']['Data']
+        df = pd.DataFrame(raw)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('time', inplace=True)
+        # Rename columns to match our feature engineering expectations
+        df.rename(columns={'open':'open', 'high':'high', 'low':'low', 'close':'close', 'volumefrom':'volume', 'volumeto':'volumeto'}, inplace=True)
+        df = df[['open','high','low','close','volume']].astype(float)
         return df
     except Exception as e:
-        st.warning(f"CoinGecko fetch error: {e}")
+        st.error(f"Failed to fetch data from CryptoCompare: {e}")
         return pd.DataFrame()
 
 def compute_rsi(series, period=14):
@@ -113,18 +89,8 @@ def predict_next_day(model, df):
     return prediction
 
 def main():
-    df = fetch_data_yfinance(selected_crypto_symbol)
-    if df.empty:
-        st.info("Falling back to CoinGecko data source...")
-        cg_map = {
-            "BTC-USD": "bitcoin",
-            "ETH-USD": "ethereum",
-            "BNB-USD": "binancecoin",
-            "ADA-USD": "cardano",
-            "SOL-USD": "solana"
-        }
-        df = fetch_data_coingecko(cg_map.get(selected_crypto_symbol, "bitcoin"))
-
+    st.info("Fetching data from CryptoCompare API...")
+    df = fetch_data_cryptocompare(selected_crypto_symbol)
     if df.empty:
         st.error("Failed to load data. Please try again later or select another crypto.")
         return
