@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import numpy as np
 import time
+from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
@@ -79,12 +80,8 @@ def train_model(df):
     return model, acc, report, X_test, y_test
 
 def fetch_realtime_price(symbol):
-    # CryptoCompare price endpoint
     url = "https://min-api.cryptocompare.com/data/price"
-    params = {
-        "fsym": symbol,
-        "tsyms": "USD"
-    }
+    params = {"fsym": symbol, "tsyms": "USD"}
     try:
         r = requests.get(url, params=params)
         r.raise_for_status()
@@ -95,6 +92,7 @@ def fetch_realtime_price(symbol):
         return None
 
 def main():
+    # Historical data and model training
     try:
         with st.spinner("Fetching historical data..."):
             df = fetch_data_cryptocompare(selected_crypto_symbol, limit=days)
@@ -115,25 +113,63 @@ def main():
             st.success("🟢 Model predicts the price will **go UP** tomorrow.")
         else:
             st.error("🔴 Model predicts the price will **go DOWN** tomorrow.")
+    except Exception as e:
+        st.error(f"An error occurred while loading or training: {e}")
+        return
 
-        # Real-time price live update area
-        st.markdown("### Real-Time Price (updates every 10 seconds)")
+    # Real-time price live update toggle
+    st.markdown("---")
+    st.markdown("## Real-Time Price Monitoring")
 
-        price_placeholder = st.empty()
-        last_price = None
+    run_live = st.checkbox("Enable Live Price Updates", value=False)
+    price_threshold_up = st.number_input("Alert if price rises above:", min_value=0.0, value=0.0, step=1.0)
+    price_threshold_down = st.number_input("Alert if price falls below:", min_value=0.0, value=0.0, step=1.0)
 
-        for _ in range(30):  # Run loop 30 times (~5 min)
+    price_placeholder = st.empty()
+    chart_placeholder = st.empty()
+    alert_placeholder = st.empty()
+
+    if run_live:
+        prices = []
+        times = []
+
+        for _ in range(60*5):  # Run for ~5 mins (60*5 iterations at 1 sec)
             price = fetch_realtime_price(selected_crypto_symbol)
             if price is not None:
-                if price != last_price:
-                    price_placeholder.markdown(f"**Current {selected_crypto_name} Price:** ${price:,.2f} USD")
-                    last_price = price
-            time.sleep(10)
+                current_time = datetime.now()
+                prices.append(price)
+                times.append(current_time)
 
-        st.markdown("Stream finished updating real-time prices.")
+                # Display price
+                price_placeholder.markdown(f"**Current {selected_crypto_name} Price:** ${price:,.2f} USD (Updated: {current_time.strftime('%H:%M:%S')})")
 
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+                # Check alerts
+                if price_threshold_up > 0 and price > price_threshold_up:
+                    alert_placeholder.success(f"🚀 Price Alert! Price rose above ${price_threshold_up:,.2f}!")
+                elif price_threshold_down > 0 and price < price_threshold_down:
+                    alert_placeholder.error(f"⚠️ Price Alert! Price fell below ${price_threshold_down:,.2f}!")
+                else:
+                    alert_placeholder.empty()
+
+                # Update live price chart
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=times, y=prices, mode='lines+markers', name='Price USD'))
+                fig.update_layout(
+                    title=f"Live Price Chart of {selected_crypto_name}",
+                    xaxis_title="Time",
+                    yaxis_title="Price (USD)",
+                    template="plotly_dark",
+                    height=400
+                )
+                chart_placeholder.plotly_chart(fig, use_container_width=True)
+
+            else:
+                price_placeholder.warning("Failed to fetch live price.")
+
+            time.sleep(1)  # Update every 1 second
+
+    else:
+        st.info("Check the box above to enable live price updates.")
 
 if __name__ == "__main__":
     main()
