@@ -14,16 +14,15 @@ import plotly.graph_objs as go
 # 1) PAGE CONFIG: must come before any other st.* calls
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Dragon trading AI",  # updated here
+    page_title="Dragon trading AI",
     page_icon="🐉",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2) Inject a full‐page, transparent dragon background (CSS)
+# 2) Load background image and inject full‐page transparent dragon background (CSS)
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data
 def get_base64_image(path: str) -> str:
     """
     Read a local image file (dragon.png) and return it as a Base64‐encoded string.
@@ -35,22 +34,70 @@ def get_base64_image(path: str) -> str:
 # Make sure dragon.png is in the same folder as this script
 dragon_b64 = get_base64_image("dragon.png")
 
+# Transparent full CSS styling
 page_bg_style = f"""
 <style>
+/* Background image for entire app */
 .stApp {{
   background-image: url("data:image/png;base64,{dragon_b64}");
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
 }}
+
+/* Transparent containers */
+.css-1d391kg, .css-1v0mbdj, .css-18ni7ap, .css-1cpxqw2, .css-1aumxhk {{
+  background-color: rgba(255, 255, 255, 0) !important;
+  box-shadow: none !important;
+  border: none !important;
+}}
+
+/* Transparent sidebar */
+[data-testid="stSidebar"] > div:first-child {{
+  background-color: rgba(255, 255, 255, 0) !important;
+}}
+
+/* Transparent header area */
+.css-1dp5vir {{
+  background-color: rgba(255, 255, 255, 0) !important;
+  box-shadow: none !important;
+}}
+
+/* Make all text and labels white for visibility */
+h1, h2, h3, h4, h5, h6, p, span, div, label {{
+  color: white !important;
+}}
+
+/* Transparent button styling */
+.stButton > button {{
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  color: white !important;
+  border: 1px solid white !important;
+  border-radius: 10px;
+}}
+
+/* Transparent metrics */
+[data-testid="stMetric"] {{
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  border-radius: 10px;
+  padding: 10px;
+  color: white !important;
+}}
+
+/* Transparent chart/container areas */
+.css-1e5imcs, .element-container {{
+  background-color: rgba(255, 255, 255, 0) !important;
+  box-shadow: none !important;
+}}
 </style>
 """
+
 st.markdown(page_bg_style, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3) MAIN HEADING below CSS
 # ─────────────────────────────────────────────────────────────────────────────
-st.title("Dragon trading AI")  # new main heading
+st.title("Dragon trading AI")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4) SIDEBAR & HEADER
@@ -144,7 +191,7 @@ def train_model(df):
     model.fit(X_train, y_train)
     preds = model.predict(X_test)
     acc = accuracy_score(y_test, preds)
-    report = classification_report(y_test, preds, output_dict=False)
+    report = classification_report(y_test, preds)  # ensure string output
     return model, acc, report, X_test, y_test
 
 def fetch_realtime_price(symbol):
@@ -193,6 +240,7 @@ with tab1:
             # Short-Term (10 min / 1 hr)
             st.markdown("### ⏱️ Short‐Term Predictions")
             try:
+                # Fetch minute-level data
                 url_min = "https://min-api.cryptocompare.com/data/v2/histominute"
                 params_min = {
                     "fsym": selected_crypto_symbol,
@@ -272,6 +320,8 @@ with tab1:
                 margin=dict(l=0, r=0, t=30, b=0),
                 yaxis_title="Price (USD)",
                 xaxis_title="Date",
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)'
             )
             st.plotly_chart(fig_hist, use_container_width=True)
 
@@ -307,9 +357,9 @@ with tab2:
                 times.append(current_time)
 
                 price_placeholder.markdown(
-                    f"<div style='font-size:18px'>"
+                    f"<div style='font-size:18px;'>"
                     f"<b>Current {selected_crypto_name}:</b> ${price:,.2f} USD  "
-                    f"<span style='color:gray;font-size:14px'>({current_time.strftime('%H:%M:%S')})</span>"
+                    f"<span style='color:gray;font-size:14px;'>{current_time.strftime('%H:%M:%S')}</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -341,6 +391,8 @@ with tab2:
                     xaxis_title="Time",
                     yaxis_title="Price (USD)",
                     height=400,
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
                 )
                 chart_placeholder.plotly_chart(fig_live, use_container_width=True)
 
