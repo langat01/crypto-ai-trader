@@ -1,4 +1,5 @@
 import streamlit as st
+import base64
 import requests
 import pandas as pd
 import numpy as np
@@ -9,17 +10,52 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 import plotly.graph_objs as go
 
-# ------------------------------  
-# 1. PAGE CONFIG & SIDEBAR  
-# ------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 1) PAGE CONFIG: must come before any other st.* calls
+# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Dragon Trading AI",
+    page_title="Dragon trading AI",
     page_icon="🐉",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Sidebar Styling (logo + sections)
+# ─────────────────────────────────────────────────────────────────────────────
+# 2) Inject a full‐page, transparent dragon background (CSS)
+#    (No caching here so updates to dragon.png are picked up immediately)
+# ─────────────────────────────────────────────────────────────────────────────
+def get_base64_image(path: str) -> str:
+    """
+    Read a local image file (dragon.png) and return it as a Base64‐encoded string.
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+# Make sure dragon.png is in the same folder as this script
+dragon_b64 = get_base64_image("dragon.png")
+
+page_bg_style = f"""
+<style>
+.stApp {{
+  background-image: url("data:image/png;base64,{dragon_b64}");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}}
+</style>
+"""
+st.markdown(page_bg_style, unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3) MAIN HEADING below CSS
+# ─────────────────────────────────────────────────────────────────────────────
+st.title("Dragon trading AI")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4) SIDEBAR & HEADER
+# ─────────────────────────────────────────────────────────────────────────────
+# Sidebar header with a small dragon icon
 st.sidebar.markdown(
     """
     <div style="text-align:center">
@@ -43,17 +79,16 @@ selected_crypto_name = st.sidebar.selectbox("Cryptocurrency", list(cryptos.keys(
 selected_crypto_symbol = cryptos[selected_crypto_name]
 
 days = st.sidebar.slider(
-    "Historical days for model training", 
+    "Historical days for model training",
     min_value=180, max_value=1000, value=730, step=30
 )
 
 st.sidebar.markdown("---")
-st.sidebar.write("By Weldon Langat")  # Or attribution
-# ------------------------------
+st.sidebar.write("By _Your Name_")
 
-# ------------------------------
-# 2. UTILITY FUNCTIONS  
-# ------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 5) UTILITY FUNCTIONS
+# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def fetch_data_cryptocompare(symbol, limit=730):
     url = "https://min-api.cryptocompare.com/data/v2/histoday"
@@ -123,28 +158,26 @@ def fetch_realtime_price(symbol):
         st.warning(f"Failed to fetch live price: {e}")
         return None
 
-# ------------------------------
-# 3. TABS: Model & Predictions vs Live Monitor  
-# ------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 6) TABS: Model & Predictions vs Live Monitor
+# ─────────────────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["📉 Model & Predictions", "📈 Live Price Monitor"])
 
-# ------------------------------
-# 4. TAB 1: MODEL & PREDICTIONS  
-# ------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 7) TAB 1: MODEL & PREDICTIONS
+# ─────────────────────────────────────────────────────────────────────────────
 with tab1:
     st.markdown("## 🧠 Train & Evaluate Model")
-    # Fetch historical
     try:
         with st.spinner("Fetching historical data..."):
             df_hist = fetch_data_cryptocompare(selected_crypto_symbol, limit=days)
         if df_hist.empty:
-            st.error("No historical data. Try different crypto or fewer days.")
+            st.error("No historical data. Try a different crypto or fewer days.")
         else:
             df_features = create_features(df_hist)
             with st.spinner("Training model..."):
                 model, acc, report, X_test, y_test = train_model(df_features)
 
-            # Show accuracy & classification report
             st.markdown(f"### Model Accuracy on Test Set: **{acc:.2%}**")
             st.text_area("Classification Report", report, height=150)
 
@@ -157,12 +190,8 @@ with tab1:
             else:
                 col_a.metric("Tomorrow (24 h)", "⬇️ Down", delta=None)
 
-            # ──────────────────────────────────────────────────────────────────
             # Short-Term (10 min / 1 hr)
-            # ──────────────────────────────────────────────────────────────────
             st.markdown("### ⏱️ Short‐Term Predictions")
-
-            # Fetch last 70 minutes of data for short‐term
             try:
                 url_min = "https://min-api.cryptocompare.com/data/v2/histominute"
                 params_min = {
@@ -193,7 +222,6 @@ with tab1:
                 )
                 df_min = df_min[["open", "high", "low", "close", "volume"]].astype(float)
 
-                # Compute minute features
                 df_min["return"] = df_min["close"].pct_change()
                 df_min["sma_5"] = df_min["close"].rolling(window=5).mean()
                 df_min["sma_10"] = df_min["close"].rolling(window=10).mean()
@@ -210,7 +238,6 @@ with tab1:
                 pred_10min = model.predict(X_short)[0]
                 pred_1hr = model.predict(X_short)[0]
 
-                # Display in two columns
                 if pred_10min == 1:
                     col_b.metric("Next 10 min", "⬆️ Up")
                 else:
@@ -224,9 +251,7 @@ with tab1:
             except Exception as e:
                 st.warning(f"Short-term fetch failed: {e}")
 
-            # ──────────────────────────────────────────────────────────────────
-
-            # Show historical candlestick (last 30 days) on dark theme
+            # Historical 30-day candlestick
             st.markdown("### 📊 Historical 30 Day Candlestick")
             df_30 = df_hist.tail(30)
             fig_hist = go.Figure(
@@ -253,9 +278,9 @@ with tab1:
     except Exception as e:
         st.error(f"Error in Model & Predictions: {e}")
 
-# ------------------------------
-# 5. TAB 2: LIVE PRICE MONITOR  
-# ------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 7) TAB 2: LIVE PRICE MONITOR
+# ─────────────────────────────────────────────────────────────────────────────
 with tab2:
     st.markdown("## ⏲️ Live Price Monitoring")
     run_live = st.checkbox("Enable Live Price Updates", value=False)
@@ -274,7 +299,6 @@ with tab2:
         prices = []
         times = []
 
-        # Loop for ~5 minutes of updates (adjust range for longer)
         for _ in range(60 * 5):
             price = fetch_realtime_price(selected_crypto_symbol)
             if price is not None:
@@ -282,7 +306,6 @@ with tab2:
                 prices.append(price)
                 times.append(current_time)
 
-                # Show current price + timestamp
                 price_placeholder.markdown(
                     f"<div style='font-size:18px'>"
                     f"<b>Current {selected_crypto_name}:</b> ${price:,.2f} USD  "
@@ -291,7 +314,6 @@ with tab2:
                     unsafe_allow_html=True,
                 )
 
-                # Check thresholds
                 if price_threshold_up > 0 and price > price_threshold_up:
                     alert_placeholder.success(
                         f"🚀 Price Alert: {selected_crypto_name} > ${price_threshold_up:,.2f}"
@@ -303,7 +325,6 @@ with tab2:
                 else:
                     alert_placeholder.empty()
 
-                # Live line chart (dark theme)
                 fig_live = go.Figure()
                 fig_live.add_trace(
                     go.Scatter(
@@ -326,12 +347,12 @@ with tab2:
             else:
                 price_placeholder.warning("Unable to fetch live price.")
 
-            time.sleep(1)  # 1 sec update
+            time.sleep(1)
 
     else:
         st.info("Toggle the checkbox above to start live monitoring.")
 
-# ------------------------------
-# 6. FOOTER SPACING  
-# ------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 8) FOOTER SPACING
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<br>", unsafe_allow_html=True)
