@@ -171,5 +171,5 @@ def main():
     else:
         st.info("Check the box above to enable live price updates.")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
