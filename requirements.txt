@@ -1,20 +1,23 @@
-streamlit
-yfinance
-pandas
-numpy
-scikit-learn
-joblib
-plotly
-matplotlib
-ta
-xgboost
-lightgbm
-optuna
-seaborn
-streamlit-aggrid
-streamlit-option-menu
-python-dotenv
-requests
-black
-flake8
-pytest
+pip install --upgrade \
+streamlit \
+yfinance \
+pandas \
+numpy \
+scikit-learn \
+joblib \
+plotly \
+matplotlib \
+ta \
+xgboost \
+lightgbm \
+optuna \
+seaborn \
+streamlit-aggrid \
+streamlit-option-menu \
+python-dotenv \
+requests \
+black \
+flake8 \
+pytest \
+python-binance \
+toml
