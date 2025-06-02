@@ -131,7 +131,7 @@ days = st.sidebar.slider(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.write("DEVELOP BY WELDON LANGAT")
+st.sidebar.write("DEVELOP BY WELDON KIPKURUI LANGAT")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5) UTILITY FUNCTIONS
