@@ -10,8 +10,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 import plotly.graph_objs as go
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1) PAGE CONFIG: must come before any other st.* calls
+
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Dragon trading AI",
@@ -21,7 +20,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2) Load background image and inject full‐page transparent dragon background (CSS)
+# 2) Loading background image and inject full‐page transparent dragon background (CSS)
 # ─────────────────────────────────────────────────────────────────────────────
 def get_base64_image(path: str) -> str:
     """
@@ -31,7 +30,7 @@ def get_base64_image(path: str) -> str:
         data = f.read()
     return base64.b64encode(data).decode()
 
-# Make sure dragon.png is in the same folder as this script
+# Making sure dragon.png is in the same folder as this script
 dragon_b64 = get_base64_image("dragon.png")
 
 # Transparent full CSS styling
@@ -408,3 +407,4 @@ with tab2:
 # 9) FOOTER SPACING
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<br>", unsafe_allow_html=True)
+
